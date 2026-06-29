@@ -25,7 +25,13 @@ JadeUI 是 [JadeView](https://jade.run) 的 Python SDK，让你可以使用 Pyth
 - **IPC 通信** - Python 与前端双向通信
 - **对话框 API** - 文件选择、消息框 (v1.3.0+)
 - **通知 API** - Windows 原生桌面通知 (v1.3.0+)
+- **系统托盘** - 托盘图标、提示与右键菜单 (v2.2.4+)
+- **全局热键** - 应用在后台也能响应的快捷键 (v2.2.4+)
+- **剪贴板 / 系统信息** - 剪贴板读写、显示器/语言/系统路径 (v2.2.4+)
+- **窗口增强** - 缩放、任务栏进度/闪烁、DevTools、内容保护等 (v2.2.4+)
 - **打包体积** - 极小的依赖，打包后体积仅有8MB左右
+
+> 本版本对应 JadeView 原生 **v2.2.4**。从 1.x 升级的破坏性变更详见 [docs/UPGRADE_v2.2.4.md](docs/UPGRADE_v2.2.4.md)。
 
 ## 安装
 
@@ -78,6 +84,8 @@ app.run()
 | [router_demo](./examples/router_demo) | 内置路由系统实现多页面应用 |
 | [custom_template](./examples/custom_template) | 自定义 HTML 模板和样式 |
 | [vue_app](./examples/vue_app) | Vue.js + JadeUI 集成示例 |
+| [dialog_notification_demo](./examples/dialog_notification_demo) | 对话框与桌面通知 (v1.3.0+) |
+| [p3_demo](./examples/p3_demo) | **系统托盘 / 全局热键 / 剪贴板 / 系统信息 / 窗口增强** (v2.2.4+) |
 
 ### 效果预览
 
