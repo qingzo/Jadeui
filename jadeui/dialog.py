@@ -60,12 +60,42 @@ from typing import Any, Callable, Dict, List, Optional
 from .core import DLLManager
 from .core.types import (
     DialogCallback,
+    FileDialogParams,
     MessageBoxParams,
-    OpenDialogParams,
-    SaveDialogParams,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _read_result_ptr(ptr: Optional[int]) -> Optional[str]:
+    """读取原生返回的 char* 结果并释放其内存。
+
+    JadeView 2.x 的同步对话框函数返回 char*（结果 JSON 字符串），
+    需调用 jade_text_free 释放。绑定层 restype 为 c_void_p，这里拿到整数地址。
+    """
+    if not ptr:
+        return None
+    try:
+        text = ctypes.cast(ptr, ctypes.c_char_p).value
+        result = text.decode("utf-8") if text else None
+    finally:
+        dll = DLLManager()
+        if dll.has_function("jade_text_free"):
+            try:
+                dll.jade_text_free(ctypes.cast(ptr, ctypes.c_char_p))
+            except Exception as e:  # pragma: no cover - 防御性
+                logger.debug(f"jade_text_free failed: {e}")
+    return result
+
+
+def _parse_result(text: Optional[str]) -> Any:
+    """尝试将结果字符串解析为 JSON；失败则原样返回。"""
+    if text is None:
+        return None
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return text
 
 
 class Dialog:
@@ -97,17 +127,17 @@ class Dialog:
 
     @staticmethod
     def _format_properties(properties: Optional[List[str]]) -> Optional[bytes]:
-        """格式化对话框属性为逗号分隔字符串
+        """格式化对话框属性为 JSON 数组（JadeView 2.x）
 
         Args:
             properties: 属性列表，如 ["openFile", "multiSelections"]
 
         Returns:
-            逗号分隔的属性字符串
+            JSON 数组格式的属性字符串
         """
         if not properties:
             return None
-        return ",".join(properties).encode("utf-8")
+        return json.dumps(properties, ensure_ascii=False).encode("utf-8")
 
     @staticmethod
     def show_open_dialog(
@@ -118,9 +148,14 @@ class Dialog:
         filters: Optional[List[Dict[str, Any]]] = None,
         properties: Optional[List[str]] = None,
         blocking: bool = True,
-        callback: Optional[Callable[[str], None]] = None,
-    ) -> int:
+        callback: Optional[Callable[[Any], None]] = None,
+    ) -> Any:
         """显示打开文件对话框
+
+        JadeView 2.x 行为:
+            - 未提供 ``callback``：同步阻塞，**返回解析后的结果**（dict/list/str），
+              取消时通常为 None 或包含 ``canceled`` 字段。
+            - 提供 ``callback``：异步非阻塞，结果通过回调返回，本方法返回是否成功提交 (1/0)。
 
         Args:
             window_id: 父窗口 ID
@@ -131,71 +166,44 @@ class Dialog:
                     如 [{"name": "图片", "extensions": ["png", "jpg"]}]
             properties: 对话框属性列表
                     可选值: "openFile", "openDirectory", "multiSelections", "showHiddenFiles"
-            blocking: 是否阻塞进程（默认 True）
-            callback: 回调函数，非阻塞模式下使用
-
-        Returns:
-            1 表示成功，0 表示失败
+            blocking: 兼容参数；提供 callback 时按异步处理
+            callback: 回调函数（异步模式），接收解析后的结果
 
         Example:
-            # 阻塞模式
-            Dialog.show_open_dialog(
-                window_id=1,
+            # 同步：直接拿到结果
+            result = Dialog.show_open_dialog(
                 title="选择图片",
                 filters=[{"name": "图片", "extensions": ["png", "jpg", "gif"]}],
-                properties=["openFile", "multiSelections"]
+                properties=["openFile", "multiSelections"],
             )
 
-            # 非阻塞模式 + 回调
-            def on_result(result):
-                print(f"选中: {result}")
-
-            Dialog.show_open_dialog(
-                window_id=1,
-                title="选择文件",
-                properties=["openFile"],
-                blocking=False,
-                callback=on_result
-            )
+            # 异步 + 回调
+            Dialog.show_open_dialog(properties=["openFile"], callback=lambda r: print(r))
         """
         dll = DLLManager()
         if not dll.is_loaded():
             dll.load()
 
         if not dll.has_function("jade_dialog_show_open_dialog"):
-            logger.warning("jade_dialog_show_open_dialog 不可用，需要 JadeView 1.3.0+")
-            return 0
+            logger.warning("jade_dialog_show_open_dialog 不可用，需要 JadeView 2.x")
+            return None
 
-        # 处理回调
-        cb_ptr = None
-        if callback and not blocking:
-
-            @DialogCallback
-            def c_callback(result: bytes):
-                try:
-                    result_str = result.decode("utf-8") if result else ""
-                    callback(result_str)
-                except Exception as e:
-                    logger.error(f"Dialog callback error: {e}")
-
-            Dialog._callbacks.append(c_callback)
-            cb_ptr = ctypes.cast(c_callback, ctypes.c_void_p)
-
-        # 创建参数结构体
-        params = OpenDialogParams(
+        params = FileDialogParams(
             window_id=window_id,
             title=title.encode("utf-8") if title else None,
             default_path=default_path.encode("utf-8") if default_path else None,
             button_label=button_label.encode("utf-8") if button_label else None,
             filters=Dialog._format_filters_json(filters),
             properties=Dialog._format_properties(properties),
-            blocking=1 if blocking else 0,
-            callback=cb_ptr,
         )
 
-        # 调用 DLL 函数
-        result = dll.jade_dialog_show_open_dialog(ctypes.byref(params))
-        return result
+        if callback is not None:
+            return Dialog._call_async(
+                "jade_dialog_show_open_dialog_async", params, callback
+            )
+
+        ptr = dll.jade_dialog_show_open_dialog(ctypes.byref(params))
+        return _parse_result(_read_result_ptr(ptr))
 
     @staticmethod
     def show_save_dialog(
@@ -205,9 +213,12 @@ class Dialog:
         button_label: Optional[str] = None,
         filters: Optional[List[Dict[str, Any]]] = None,
         blocking: bool = True,
-        callback: Optional[Callable[[str], None]] = None,
-    ) -> int:
+        callback: Optional[Callable[[Any], None]] = None,
+    ) -> Any:
         """显示保存文件对话框
+
+        JadeView 2.x 行为同 :meth:`show_open_dialog`：未提供 callback 时同步返回结果，
+        提供 callback 时异步并返回提交状态。
 
         Args:
             window_id: 父窗口 ID
@@ -215,18 +226,14 @@ class Dialog:
             default_path: 默认保存路径/文件名
             button_label: 确认按钮的自定义标签
             filters: 文件过滤器列表，JSON 格式
-            blocking: 是否阻塞进程（默认 True）
-            callback: 回调函数，非阻塞模式下使用
-
-        Returns:
-            1 表示成功，0 表示失败
+            blocking: 兼容参数
+            callback: 回调函数（异步模式）
 
         Example:
-            Dialog.show_save_dialog(
-                window_id=1,
+            path = Dialog.show_save_dialog(
                 title="保存文档",
                 default_path="document.txt",
-                filters=[{"name": "文本文件", "extensions": ["txt"]}]
+                filters=[{"name": "文本文件", "extensions": ["txt"]}],
             )
         """
         dll = DLLManager()
@@ -234,38 +241,25 @@ class Dialog:
             dll.load()
 
         if not dll.has_function("jade_dialog_show_save_dialog"):
-            logger.warning("jade_dialog_show_save_dialog 不可用，需要 JadeView 1.3.0+")
-            return 0
+            logger.warning("jade_dialog_show_save_dialog 不可用，需要 JadeView 2.x")
+            return None
 
-        # 处理回调
-        cb_ptr = None
-        if callback and not blocking:
-
-            @DialogCallback
-            def c_callback(result: bytes):
-                try:
-                    result_str = result.decode("utf-8") if result else ""
-                    callback(result_str)
-                except Exception as e:
-                    logger.error(f"Dialog callback error: {e}")
-
-            Dialog._callbacks.append(c_callback)
-            cb_ptr = ctypes.cast(c_callback, ctypes.c_void_p)
-
-        # 创建参数结构体
-        params = SaveDialogParams(
+        params = FileDialogParams(
             window_id=window_id,
             title=title.encode("utf-8") if title else None,
             default_path=default_path.encode("utf-8") if default_path else None,
             button_label=button_label.encode("utf-8") if button_label else None,
             filters=Dialog._format_filters_json(filters),
-            blocking=1 if blocking else 0,
-            callback=cb_ptr,
+            properties=None,
         )
 
-        # 调用 DLL 函数
-        result = dll.jade_dialog_show_save_dialog(ctypes.byref(params))
-        return result
+        if callback is not None:
+            return Dialog._call_async(
+                "jade_dialog_show_save_dialog_async", params, callback
+            )
+
+        ptr = dll.jade_dialog_show_save_dialog(ctypes.byref(params))
+        return _parse_result(_read_result_ptr(ptr))
 
     @staticmethod
     def show_message_box(
@@ -278,9 +272,15 @@ class Dialog:
         cancel_id: int = -1,
         type_: str = "none",
         blocking: bool = True,
-        callback: Optional[Callable[[str], None]] = None,
-    ) -> int:
+        callback: Optional[Callable[[Any], None]] = None,
+    ) -> Any:
         """显示消息框
+
+        JadeView 2.x 行为:
+            - 未提供 ``callback``：同步阻塞，返回解析后的结果（通常含被点击按钮索引）。
+            - 提供 ``callback``：异步非阻塞，返回提交状态 (1/0)。
+
+        注意: ``buttons`` 现在以 JSON 数组传给底层（1.x 为 ``|`` 分隔）。
 
         Args:
             window_id: 父窗口 ID
@@ -290,23 +290,19 @@ class Dialog:
             buttons: 按钮文本列表，如 ["确定", "取消"]
             default_id: 默认选中的按钮索引
             cancel_id: 取消按钮的索引（按 ESC 时触发）
-            type_: 消息类型: "none", "info", "error", "warning", "question"
-            blocking: 是否阻塞进程（默认 True）
-            callback: 回调函数，非阻塞模式下使用
-
-        Returns:
-            1 表示成功，0 表示失败
+            type_: 消息类型: "none", "info", "warning", "error"
+            blocking: 兼容参数
+            callback: 回调函数（异步模式）
 
         Example:
-            Dialog.show_message_box(
-                window_id=1,
+            result = Dialog.show_message_box(
                 title="确认删除",
                 message="确定要删除这个文件吗？",
                 detail="此操作不可撤销",
                 type_="warning",
                 buttons=["删除", "取消"],
                 default_id=1,
-                cancel_id=1
+                cancel_id=1,
             )
         """
         dll = DLLManager()
@@ -314,44 +310,50 @@ class Dialog:
             dll.load()
 
         if not dll.has_function("jade_dialog_show_message_box"):
-            logger.warning("jade_dialog_show_message_box 不可用，需要 JadeView 1.3.0+")
-            return 0
+            logger.warning("jade_dialog_show_message_box 不可用，需要 JadeView 2.x")
+            return None
 
-        # 处理回调
-        cb_ptr = None
-        if callback and not blocking:
+        # 格式化按钮（JadeView 2.x: JSON 数组）
+        buttons_json = json.dumps(buttons or ["确定"], ensure_ascii=False)
 
-            @DialogCallback
-            def c_callback(result: bytes):
-                try:
-                    result_str = result.decode("utf-8") if result else ""
-                    callback(result_str)
-                except Exception as e:
-                    logger.error(f"Dialog callback error: {e}")
-
-            Dialog._callbacks.append(c_callback)
-            cb_ptr = ctypes.cast(c_callback, ctypes.c_void_p)
-
-        # 格式化按钮（使用 | 分隔）
-        buttons_str = "|".join(buttons) if buttons else "确定"
-
-        # 创建参数结构体
         params = MessageBoxParams(
             window_id=window_id,
             title=title.encode("utf-8") if title else None,
             message=message.encode("utf-8") if message else None,
             detail=detail.encode("utf-8") if detail else None,
-            buttons=buttons_str.encode("utf-8"),
+            buttons=buttons_json.encode("utf-8"),
             default_id=default_id,
             cancel_id=cancel_id,
             type_=type_.encode("utf-8") if type_ else b"none",
-            blocking=1 if blocking else 0,
-            callback=cb_ptr,
         )
 
-        # 调用 DLL 函数
-        result = dll.jade_dialog_show_message_box(ctypes.byref(params))
-        return result
+        if callback is not None:
+            return Dialog._call_async(
+                "jade_dialog_show_message_box_async", params, callback
+            )
+
+        ptr = dll.jade_dialog_show_message_box(ctypes.byref(params))
+        return _parse_result(_read_result_ptr(ptr))
+
+    @staticmethod
+    def _call_async(fn_name: str, params: Any, callback: Callable[[Any], None]) -> int:
+        """以异步方式调用对话框函数，回调收到解析后的结果。"""
+        dll = DLLManager()
+        if not dll.has_function(fn_name):
+            logger.warning(f"{fn_name} 不可用，需要 JadeView 2.x")
+            return 0
+
+        @DialogCallback
+        def c_callback(result: bytes):
+            try:
+                result_str = result.decode("utf-8") if result else None
+                callback(_parse_result(result_str))
+            except Exception as e:
+                logger.error(f"Dialog callback error: {e}")
+
+        # 保存引用，防止回调被垃圾回收
+        Dialog._callbacks.append(c_callback)
+        return getattr(dll, fn_name)(ctypes.byref(params), ctypes.cast(c_callback, ctypes.c_void_p))
 
     @staticmethod
     def show_error_box(

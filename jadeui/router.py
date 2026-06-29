@@ -451,23 +451,23 @@ class Router:
         let currentPath = '';
 
         const router = {{
-            go: function(path) {{ jade.ipcSend('router:navigate', path); }},
+            go: function(path) {{ jade.invoke('router:navigate', path); }},
             current: function() {{ return currentPath; }},
             params: {{}},
         }};
 
-        function windowAction(action) {{ jade.ipcSend('windowAction', action); }}
+        function windowAction(action) {{ jade.invoke('windowAction', action); }}
 
         function setTheme(theme) {{
             document.documentElement.setAttribute('data-theme', theme);
             document.querySelectorAll('.theme-btn').forEach(btn => {{
                 btn.classList.toggle('active', btn.dataset.theme === theme);
             }});
-            jade.ipcSend('router:setTheme', theme);
+            jade.invoke('router:setTheme', theme);
         }}
 
         function setBackdrop(backdrop) {{
-            jade.ipcSend('router:setBackdrop', backdrop);
+            jade.invoke('router:setBackdrop', backdrop);
         }}
 
         function updateNavHighlight(path) {{
@@ -495,9 +495,10 @@ class Router:
             }}
         }}
 
-        jade.invoke('router:update', async function(data) {{
+        jade.on('router:update', async function(data) {{
             try {{
-                const navData = JSON.parse(data);
+                // JadeView 2.x: jade.on 回调收到的可能是已解析对象或 JSON 字符串
+                const navData = (typeof data === 'string') ? JSON.parse(data) : data;
                 currentPath = navData.path;
                 router.params = navData.params || {{}};
 
@@ -525,7 +526,7 @@ class Router:
             }}
         }});
 
-        jade.invoke('router:themeChanged', function(theme) {{
+        jade.on('router:themeChanged', function(theme) {{
             document.documentElement.setAttribute('data-theme', theme.toLowerCase());
             document.querySelectorAll('.theme-btn').forEach(btn => {{
                 btn.classList.toggle('active', btn.dataset.theme === theme.toLowerCase());
@@ -533,7 +534,7 @@ class Router:
         }});
 
         // 通知后端前端已准备好
-        jade.ipcSend('router:ready', '');
+        jade.invoke('router:ready', '');
     </script>
     <!-- 第三方脚本 -->
 {extra_scripts}

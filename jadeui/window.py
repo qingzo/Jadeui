@@ -18,6 +18,7 @@ from .core.types import (
     GenericWindowEventCallback,
     WebViewSettings,
     WebViewWindowOptions,
+    rgba_to_hex,
 )
 from .events import EventEmitter
 from .exceptions import WindowCreationError
@@ -120,7 +121,9 @@ _EVENT_EXTRACTORS: Dict[str, Callable[[Dict], tuple]] = {
     "webview-new-window": _extract_new_window,
     "webview-page-title-updated": _extract_title,
     "favicon-updated": _extract_favicon,
+    "webview-page-favicon-updated": _extract_favicon,  # JadeView 2.x 名称
     "webview-download-started": _extract_download,  # v0.3.1+
+    "webview-download-completed": _extract_download,  # JadeView 2.x 名称
     # Other events
     "javascript-result": _extract_js_result,
 }
@@ -240,7 +243,9 @@ class Window(EventEmitter):
         self._options.setdefault("hide_window", False)
         self._options.setdefault("use_page_icon", True)
         self._options.setdefault("borderless", False)
+        self._options.setdefault("frame_style", None)  # JadeView 2.x: 显式覆盖 titlebar/borderless
         self._options.setdefault("content_protection", False)
+        self._options.setdefault("auto_save_state", False)  # JadeView 2.x: 自动保存窗口状态
 
         # 参数冲突检测：borderless 与 remove_titlebar/transparent 不能同时使用
         # 参考：JadeView DLL v1.2.0 已知问题
@@ -691,35 +696,40 @@ class Window(EventEmitter):
         logger.info(f"{event} event handler registered with DLL (callback_id={callback_id})")
 
     def _register_file_drop_handler(self, callback: Callable[..., Any]) -> None:
-        """注册 file-drop 事件处理器到 DLL"""
-        # 添加到本地监听器
+        """注册文件拖放事件处理器到 DLL
+
+        JadeView 2.x: 原生事件名为 ``drag-drop``（含 enter/over/drop/leave 阶段），
+        旧版为 ``file-drop``。这里注册 ``drag-drop``，并在收到 ``type=="drop"`` 时
+        以兼容的 ``file-drop`` Python 事件分发给用户回调。
+        """
+        # 添加到本地监听器（对外仍用 file-drop 事件名，保持向后兼容）
         self._listeners["file-drop"].append(callback)
 
         # 只注册一次到 DLL
-        if "file-drop" in self._registered_jade_events:
+        if "drag-drop" in self._registered_jade_events:
             return
 
         # 创建 ctypes 回调 (返回 void)
         @FileDropCallback
-        def file_drop_callback(window_id: int, json_data: bytes):
+        def drag_drop_callback(window_id: int, json_data: bytes):
             self._on_file_drop(window_id, json_data)
 
         # 保存引用防止垃圾回收
-        self._callbacks.append(file_drop_callback)
+        self._callbacks.append(drag_drop_callback)
 
-        # 通过 jade_on 注册到 DLL (v1.0+: 返回 callback_id)
+        # 通过 jade_on 注册到 DLL (返回 callback_id)
         callback_id = self.dll_manager.jade_on(
-            b"file-drop",
-            ctypes.cast(file_drop_callback, ctypes.c_void_p),
+            b"drag-drop",
+            ctypes.cast(drag_drop_callback, ctypes.c_void_p),
         )
 
         # 保存 callback_id 用于后续 jade_off
         if not hasattr(self, "_jade_callback_ids"):
             self._jade_callback_ids: Dict[str, int] = {}
-        self._jade_callback_ids["file-drop"] = callback_id
+        self._jade_callback_ids["drag-drop"] = callback_id
 
-        self._registered_jade_events.add("file-drop")
-        logger.info(f"file-drop event handler registered with DLL (callback_id={callback_id})")
+        self._registered_jade_events.add("drag-drop")
+        logger.info(f"drag-drop event handler registered with DLL (callback_id={callback_id})")
 
     # ==================== Window Lifecycle ====================
 
@@ -883,7 +893,7 @@ class Window(EventEmitter):
             Self for chaining
         """
         if self.id is not None:
-            self.dll_manager.focus_window(self.id)
+            self.dll_manager.set_window_focus(self.id)
         return self
 
     # ==================== Window State ====================
@@ -1105,14 +1115,15 @@ class Window(EventEmitter):
     def get_theme(self) -> str:
         """Get current window theme
 
+        JadeView 2.x: ``get_window_theme(window_id)`` 直接返回整数
+        (1=Dark, 0=Light)，表示当前实际生效的外观。
+
         Returns:
-            Current theme name
+            ``Theme.DARK`` 或 ``Theme.LIGHT``；窗口未创建时回退 ``Theme.SYSTEM``。
         """
         if self.id is not None:
-            buffer = ctypes.create_string_buffer(32)
-            result = self.dll_manager.get_window_theme(self.id, buffer, ctypes.sizeof(buffer))
-            if result == 1:
-                return buffer.value.decode("utf-8")
+            result = self.dll_manager.get_window_theme(self.id)
+            return Theme.DARK if result == 1 else Theme.LIGHT
         return Theme.SYSTEM
 
     def set_backdrop(self, backdrop: str) -> "Window":
@@ -1131,6 +1142,158 @@ class Window(EventEmitter):
             self._pending_backdrop = backdrop
         return self
 
+    # ==================== Window Extras (JadeView 2.x) ====================
+
+    def set_zoom(self, level: float) -> "Window":
+        """设置 WebView 缩放级别 (1.0 = 100%)"""
+        if self.id is not None:
+            self.dll_manager.set_webview_zoom(self.id, ctypes.c_double(level))
+        return self
+
+    def set_content_protection(self, enabled: bool = True) -> "Window":
+        """动态开关内容保护（禁止截图/录屏）"""
+        if self.id is not None:
+            self.dll_manager.set_content_protection(self.id, 1 if enabled else 0)
+        return self
+
+    def set_enabled(self, enabled: bool = True) -> "Window":
+        """启用/禁用窗口（禁用时不响应输入）"""
+        if self.id is not None:
+            self.dll_manager.set_window_enabled(self.id, 1 if enabled else 0)
+        return self
+
+    def request_redraw(self) -> "Window":
+        """请求窗口重绘"""
+        if self.id is not None:
+            self.dll_manager.request_redraw(self.id)
+        return self
+
+    def set_background_color(self, color: Any) -> "Window":
+        """设置窗口纯色背景（接受 RGBA / dict / "#RRGGBBAA" 字符串）"""
+        if self.id is not None:
+            hex_color = rgba_to_hex(color)
+            if hex_color is not None:
+                self.dll_manager.set_window_background_color(self.id, hex_color)
+        return self
+
+    def set_frame_style(self, style: str) -> "Window":
+        """设置窗口边框样式：normal / no-titlebar / borderless"""
+        if self.id is not None:
+            self.dll_manager.set_window_frame_style(self.id, style.encode("utf-8"))
+        return self
+
+    def get_bounds(self) -> Optional[dict]:
+        """获取窗口位置与尺寸 (JSON: 含 x/y/width/height 等)"""
+        if self.id is None or not self.dll_manager.has_function("get_window_bounds"):
+            return None
+        buf = ctypes.create_string_buffer(512)
+        if self.dll_manager.get_window_bounds(self.id, buf, 512) > 0:
+            try:
+                return _json_loads(buf.value.decode("utf-8", "replace"))
+            except ValueError:
+                return None
+        return None
+
+    def get_hwnd(self) -> int:
+        """获取原生窗口句柄 HWND
+
+        注意：仅 ``create_borderless_webview_window`` 创建的无边框窗口返回有效句柄，
+        标准窗口返回 0。
+        """
+        if self.id is not None and self.dll_manager.has_function("get_window_hwnd"):
+            return int(self.dll_manager.get_window_hwnd(self.id))
+        return 0
+
+    def set_ignore_cursor_events(self, ignore: bool = True) -> "Window":
+        """设置鼠标穿透（忽略光标事件）"""
+        if self.id is not None:
+            self.dll_manager.set_window_ignore_cursor_events(self.id, 1 if ignore else 0)
+        return self
+
+    def set_progress(self, progress: int, state: Optional[int] = None) -> "Window":
+        """设置任务栏进度
+
+        Args:
+            progress: 进度值 (0-100)
+            state: 进度状态（Windows ITaskbarList3 语义）：
+                0=无进度, 1=不确定, 2=正常, 4=错误(红), 8=暂停(黄)。
+                省略时：progress>0 自动用「正常」(2)，progress<=0 用「无进度」(0)。
+        """
+        if self.id is not None:
+            if state is None:
+                state = 2 if progress > 0 else 0
+            self.dll_manager.set_window_progress(self.id, progress, state)
+        return self
+
+    def flash(self, count: int = 1) -> "Window":
+        """任务栏图标闪烁以提示用户
+
+        Args:
+            count: 闪烁次数
+        """
+        if self.id is not None:
+            self.dll_manager.flash_window(self.id, count)
+        return self
+
+    def open_devtools(self) -> "Window":
+        """打开开发者工具"""
+        if self.id is not None:
+            self.dll_manager.open_devtools(self.id)
+        return self
+
+    def close_devtools(self) -> "Window":
+        """关闭开发者工具"""
+        if self.id is not None:
+            self.dll_manager.close_devtools(self.id)
+        return self
+
+    @property
+    def is_devtools_open(self) -> bool:
+        """开发者工具是否已打开"""
+        if self.id is not None and self.dll_manager.has_function("is_devtools_open"):
+            return self.dll_manager.is_devtools_open(self.id) == 1
+        return False
+
+    def get_current_url(self) -> Optional[str]:
+        """获取当前 WebView 实际 URL"""
+        if self.id is None or not self.dll_manager.has_function("get_webview_url"):
+            return None
+        buf = ctypes.create_string_buffer(4096)
+        if self.dll_manager.get_webview_url(self.id, buf, 4096) > 0:
+            return buf.value.decode("utf-8", "replace")
+        return None
+
+    def clear_browsing_data(self) -> "Window":
+        """清除该窗口 WebView 的浏览数据（缓存/cookie 等）"""
+        if self.id is not None:
+            self.dll_manager.clear_browsing_data(self.id)
+        return self
+
+    def print_page(self) -> "Window":
+        """打开打印对话框打印当前页面（WebView2 内置）"""
+        if self.id is not None and self.dll_manager.has_function("jade_print"):
+            self.dll_manager.jade_print(self.id)
+        return self
+
+    def set_titlebar_overlay(
+        self, height: int = 0, icon_color: str = "", hover_bg: str = ""
+    ) -> "Window":
+        """设置标题栏覆盖层样式（Windows）
+
+        Args:
+            height: 覆盖层高度（<=0 不修改）
+            icon_color: 图标颜色十六进制（如 "#FFFFFF"）
+            hover_bg: 悬浮背景色十六进制
+        """
+        if self.id is not None and self.dll_manager.has_function("set_titlebar_overlay_style"):
+            self.dll_manager.set_titlebar_overlay_style(
+                self.id,
+                height,
+                icon_color.encode("utf-8") if icon_color else None,
+                hover_bg.encode("utf-8") if hover_bg else None,
+            )
+        return self
+
     # ==================== WebView Operations ====================
 
     def load_url(self, url: str) -> "Window":
@@ -1144,7 +1307,8 @@ class Window(EventEmitter):
         """
         self._url = url
         if self.id is not None:
-            self.dll_manager.navigate_to_url(self.id, url.encode("utf-8"))
+            # JadeView 2.x: navigate_to_url(window_id, url, headers_json)
+            self.dll_manager.navigate_to_url(self.id, url.encode("utf-8"), None)
         return self
 
     def navigate(self, url: str) -> "Window":
@@ -1194,19 +1358,20 @@ class Window(EventEmitter):
                 self._ensure_js_result_handler()
 
                 # 包装脚本以返回 callbackId
+                # JadeView 2.x: 前端 IPC 统一用 jade.invoke（jade.ipcSend 已移除）
                 wrapped_script = f"""
 (function() {{
     try {{
         var result = eval({repr(script)});
-        if (typeof jade !== 'undefined' && jade.ipcSend) {{
-            jade.ipcSend('__js_result__', JSON.stringify({{
+        if (typeof jade !== 'undefined' && jade.invoke) {{
+            jade.invoke('__js_result__', JSON.stringify({{
                 callbackId: {callback_id},
                 result: result
             }}));
         }}
     }} catch (e) {{
-        if (typeof jade !== 'undefined' && jade.ipcSend) {{
-            jade.ipcSend('__js_result__', JSON.stringify({{
+        if (typeof jade !== 'undefined' && jade.invoke) {{
+            jade.invoke('__js_result__', JSON.stringify({{
                 callbackId: {callback_id},
                 error: e.message
             }}));
@@ -1274,7 +1439,7 @@ class Window(EventEmitter):
             Self for chaining
         """
         if self.id is not None:
-            self.dll_manager.reload(self.id)
+            self.dll_manager.reload_webview_window(self.id)
         return self
 
     def refresh(self) -> "Window":
@@ -1334,34 +1499,37 @@ class Window(EventEmitter):
 
     def _create_window(self) -> None:
         """Create the actual window using the DLL"""
-        # Prepare background color
-        background_color = self._options.get("background_color")
-        if isinstance(background_color, dict):
-            background_color = RGBA(
-                background_color.get("r", 255),
-                background_color.get("g", 255),
-                background_color.get("b", 255),
-                background_color.get("a", 255),
-            )
-        elif background_color is None:
-            background_color = RGBA(255, 255, 255, 255)
+        # Prepare background color (JadeView 2.x: 改为 "#RRGGBBAA" 字符串)
+        background_color = rgba_to_hex(self._options.get("background_color"))
 
         # Prepare theme
         theme = self._options.get("theme", Theme.SYSTEM)
         if isinstance(theme, str):
             theme = theme.encode("utf-8")
 
-        # Create window options (JadeView 1.2.0+)
+        # Resolve frame_style (JadeView 2.x: 合并 remove_titlebar / borderless)
+        # 优先使用显式 frame_style；否则从旧选项推导。
+        frame_style = self._options.get("frame_style")
+        if frame_style is None:
+            if self._options.get("borderless"):
+                frame_style = "borderless"
+            elif self._options.get("remove_titlebar"):
+                frame_style = "no-titlebar"
+            else:
+                frame_style = "normal"
+        if isinstance(frame_style, str):
+            frame_style = frame_style.encode("utf-8")
+
+        # Create window options (JadeView 2.x)
         window_options = WebViewWindowOptions(
             title=self._title.encode("utf-8"),
             width=self._width,
             height=self._height,
             resizable=self._options.get("resizable", True),
-            remove_titlebar=self._options.get("remove_titlebar", False),
+            frame_style=frame_style,
             transparent=self._options.get("transparent", False),
             background_color=background_color,
             always_on_top=self._options.get("always_on_top", False),
-            no_center=self._options.get("x", -1) != -1 or self._options.get("y", -1) != -1,
             theme=theme,
             maximized=self._options.get("maximized", False),
             maximizable=self._options.get("maximizable", True),
@@ -1376,25 +1544,39 @@ class Window(EventEmitter):
             focus=self._options.get("focus", True),
             hide_window=self._options.get("hide_window", False),
             use_page_icon=self._options.get("use_page_icon", True),
-            borderless=self._options.get("borderless", False),  # JadeView 0.2.1+
-            content_protection=self._options.get("content_protection", False),  # JadeView 1.1+
+            content_protection=self._options.get("content_protection", False),
+            auto_save_state=self._options.get("auto_save_state", False),  # JadeView 2.x
         )
 
         # Prepare WebView settings
         user_agent = self._options.get("user_agent")
         preload_js = self._options.get("preload_js")
         postmessage_whitelist = self._options.get("postmessage_whitelist")
+        cors_whitelist = self._options.get("cors_whitelist")
+        proxy_url = self._options.get("proxy_url")
+
+        # JadeView 2.x: 语义由 disable_right_click 反转为 allow_right_click
+        allow_right_click = self._options.get(
+            "allow_right_click", not self._options.get("disable_right_click", False)
+        )
 
         settings = WebViewSettings(
             autoplay=self._options.get("autoplay", False),
             background_throttling=self._options.get("background_throttling", False),
-            disable_right_click=self._options.get("disable_right_click", False),
+            allow_right_click=allow_right_click,
             ua=user_agent.encode("utf-8") if user_agent else None,
             preload_js=preload_js.encode("utf-8") if preload_js else None,
             allow_fullscreen=self._options.get("allow_fullscreen", True),
             postmessage_whitelist=postmessage_whitelist.encode("utf-8")
             if postmessage_whitelist
             else None,
+            cors_whitelist=cors_whitelist.encode("utf-8") if cors_whitelist else None,
+            autofill=self._options.get("autofill", False),
+            general_autofill_enabled=self._options.get("general_autofill_enabled", False),
+            incognito=self._options.get("incognito", False),
+            disable_clipboard=self._options.get("disable_clipboard", False),
+            proxy_url=proxy_url.encode("utf-8") if proxy_url else None,
+            focused=self._options.get("focused", self._options.get("focus", True)),
         )
 
         # Prepare URL
@@ -1510,26 +1692,34 @@ class Window(EventEmitter):
             self.id = None
 
     def _on_file_drop(self, window_id: int, json_data: bytes) -> None:
-        """Handle file drop events
+        """Handle drag-drop events
 
-        Args:
-            window_id: The window ID
-            json_data: JSON data containing files array and position
-                      Format: {"files": ["path1", "path2"], "x": x, "y": y}
+        JadeView 2.x 数据格式:
+            {"type": "enter"|"over"|"drop"|"leave", "paths": [...], "x": x, "y": y}
+        其中 ``paths`` 仅在 enter/drop 阶段存在。仅在 ``drop`` 阶段对外分发
+        ``file-drop`` 事件（携带文件路径列表与坐标）。同时分发底层 ``drag-drop``
+        事件以便需要 enter/over/leave 阶段的高级用法。
+
+        兼容旧格式 ``{"files": [...], "x", "y"}``（无 type 字段时按 drop 处理）。
         """
         try:
             data_str = json_data.decode("utf-8") if json_data else "{}"
             data = _json_loads(data_str) if data_str else {}
 
-            files = data.get("files", [])
+            phase = data.get("type")
             x = data.get("x", 0)
             y = data.get("y", 0)
+            paths = data.get("paths", data.get("files", []))
 
-            logger.debug(f"File drop: window={window_id}, files={files}, x={x}, y={y}")
-            self.emit("file-drop", files, x, y)
+            # 透传底层 drag-drop 事件（enter/over/drop/leave）
+            self.emit("drag-drop", data)
+
+            # 仅在 drop 阶段（或旧格式无 type）时触发兼容的 file-drop 回调
+            if phase is None or phase == "drop":
+                logger.debug(f"File drop: window={window_id}, paths={paths}, x={x}, y={y}")
+                self.emit("file-drop", paths, x, y)
         except Exception as e:
-            logger.error(f"Error parsing file drop data: {e}")
-            self.emit("file-drop", [], 0, 0)
+            logger.error(f"Error parsing drag-drop data: {e}")
 
     # ==================== Static Methods ====================
 

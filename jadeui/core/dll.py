@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 from ..exceptions import DLLLoadError
 from .types import (
+    FileDialogParams,
     MessageBoxParams,
     NotificationParams,
-    OpenDialogParams,
-    SaveDialogParams,
+    TrayMenuItemDesc,
     WebViewSettings,
     WebViewWindowOptions,
 )
@@ -169,10 +169,19 @@ class DLLManager:
         # ==================== Required Functions ====================
         # These must exist for the SDK to work
 
-        # Initialization
+        # Initialization (JadeView 2.x: 6 个参数)
+        # JadeView_init(enable_devmod, log_path, data_directory,
+        #               app_name, app_signature, single_instance)
         self._try_bind(
             "JadeView_init",
-            [ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p],
+            [
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.c_int,
+            ],
             ctypes.c_int,
             required=True,
         )
@@ -188,8 +197,9 @@ class DLLManager:
         # Message loop
         self._try_bind("run_message_loop", [], None, required=True)
 
-        # Cleanup
-        self._try_bind("cleanup_all_windows", [], None, required=True)
+        # Cleanup / exit (JadeView 2.x: 推荐 jadeview_exit, cleanup_all_windows 已废弃)
+        self._try_bind("jadeview_exit", [], ctypes.c_int)
+        self._try_bind("cleanup_all_windows", [], ctypes.c_int)
 
         # Window management
         self._try_bind(
@@ -225,10 +235,11 @@ class DLLManager:
         self._try_bind("set_window_theme", [ctypes.c_uint32, ctypes.c_char_p], ctypes.c_int)
         self._try_bind("set_window_backdrop", [ctypes.c_uint32, ctypes.c_char_p], ctypes.c_int)
 
-        # Local server
+        # Local server (JadeView 2.x: create_local_server 改名 set_protocol_service_path,
+        # 去掉 appname，新增 hot_reload 参数)
         self._try_bind(
-            "create_local_server",
-            [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t],
+            "set_protocol_service_path",
+            [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_int],
             ctypes.c_int,
         )
 
@@ -270,16 +281,17 @@ class DLLManager:
             [ctypes.c_uint32, ctypes.c_int],
             ctypes.c_int,
         )
+        # get_window_theme(window_id) -> int (1=Dark, 0=Light)
         self._try_bind(
             "get_window_theme",
-            [ctypes.c_uint32, ctypes.c_char_p, ctypes.c_size_t],
+            [ctypes.c_uint32],
             ctypes.c_int,
         )
 
-        # WebView navigation
+        # WebView navigation (JadeView 2.x: navigate_to_url 新增 headers_json 参数)
         self._try_bind(
             "navigate_to_url",
-            [ctypes.c_uint32, ctypes.c_char_p],
+            [ctypes.c_uint32, ctypes.c_char_p, ctypes.c_char_p],
             ctypes.c_int,
         )
         self._try_bind(
@@ -287,8 +299,9 @@ class DLLManager:
             [ctypes.c_uint32, ctypes.c_char_p],
             ctypes.c_int,
         )
+        # 刷新页面（正确函数名为 reload_webview_window）
         self._try_bind(
-            "reload",
+            "reload_webview_window",
             [ctypes.c_uint32],
             ctypes.c_int,
         )
@@ -322,8 +335,8 @@ class DLLManager:
         self._try_bind("is_window_focused", [ctypes.c_uint32], ctypes.c_int)
         self._try_bind("is_window_fullscreen", [ctypes.c_uint32], ctypes.c_int)
 
-        # Window focus
-        self._try_bind("focus_window", [ctypes.c_uint32], ctypes.c_int)
+        # Window focus (正确函数名为 set_window_focus)
+        self._try_bind("set_window_focus", [ctypes.c_uint32], ctypes.c_int)
         self._try_bind(
             "set_window_fullscreen",
             [ctypes.c_uint32, ctypes.c_int],
@@ -352,31 +365,60 @@ class DLLManager:
             ctypes.c_int,
         )
 
-        # ==================== Dialog API (v1.3.0+) ====================
-        # 参考: https://jade.run/guides/dialog-api
+        # ==================== New in JadeView 2.x ====================
+        # 动态内容保护、缩放、重绘、启用/禁用窗口
+        self._try_bind("set_content_protection", [ctypes.c_uint32, ctypes.c_int], ctypes.c_int)
+        self._try_bind("set_webview_zoom", [ctypes.c_uint32, ctypes.c_double], ctypes.c_int)
+        self._try_bind("request_redraw", [ctypes.c_uint32], ctypes.c_int)
+        self._try_bind("set_window_enabled", [ctypes.c_uint32, ctypes.c_int], ctypes.c_int)
+        self._try_bind(
+            "set_window_background_color", [ctypes.c_uint32, ctypes.c_char_p], ctypes.c_int
+        )
+        self._try_bind("set_window_frame_style", [ctypes.c_uint32, ctypes.c_char_p], ctypes.c_int)
+        # 系统信息 / 版本
+        self._try_bind("is_windows_11", [], ctypes.c_int)
+        self._try_bind("jadeview_version", [ctypes.c_char_p, ctypes.c_size_t], ctypes.c_int)
+        self._try_bind("get_webview_url", [ctypes.c_uint32, ctypes.c_char_p, ctypes.c_int], ctypes.c_int)
 
-        # 显示打开文件对话框
-        # int jade_dialog_show_open_dialog(const OpenDialogParams* params);
+        # ==================== Dialog API (JadeView 2.x) ====================
+        # 参考: https://jade.run/docs/api
+        # 同步函数返回 char*（结果 JSON 字符串，需 jade_text_free 释放）。
+        # restype 用 c_void_p 以便手动读取并释放，避免 ctypes 自动转 bytes 丢失指针。
+
+        # char* jade_dialog_show_open_dialog(const FileDialogParams* params);
         self._try_bind(
             "jade_dialog_show_open_dialog",
-            [ctypes.POINTER(OpenDialogParams)],
-            ctypes.c_int,  # 返回 1 成功，0 失败
+            [ctypes.POINTER(FileDialogParams)],
+            ctypes.c_void_p,
         )
-
-        # 显示保存文件对话框
-        # int jade_dialog_show_save_dialog(const SaveDialogParams* params);
+        # char* jade_dialog_show_save_dialog(const FileDialogParams* params);
         self._try_bind(
             "jade_dialog_show_save_dialog",
-            [ctypes.POINTER(SaveDialogParams)],
-            ctypes.c_int,  # 返回 1 成功，0 失败
+            [ctypes.POINTER(FileDialogParams)],
+            ctypes.c_void_p,
         )
-
-        # 显示消息框
-        # int jade_dialog_show_message_box(const MessageBoxParams* params);
+        # char* jade_dialog_show_message_box(const MessageBoxParams* params);
         self._try_bind(
             "jade_dialog_show_message_box",
             [ctypes.POINTER(MessageBoxParams)],
-            ctypes.c_int,  # 返回 1 成功，0 失败
+            ctypes.c_void_p,
+        )
+
+        # 异步变体: int fn(const Params* params, void(*callback)(const char*));
+        self._try_bind(
+            "jade_dialog_show_open_dialog_async",
+            [ctypes.POINTER(FileDialogParams), ctypes.c_void_p],
+            ctypes.c_int,
+        )
+        self._try_bind(
+            "jade_dialog_show_save_dialog_async",
+            [ctypes.POINTER(FileDialogParams), ctypes.c_void_p],
+            ctypes.c_int,
+        )
+        self._try_bind(
+            "jade_dialog_show_message_box_async",
+            [ctypes.POINTER(MessageBoxParams), ctypes.c_void_p],
+            ctypes.c_int,
         )
 
         # 显示错误框（简化的消息框）
@@ -405,6 +447,92 @@ class DLLManager:
             [ctypes.POINTER(NotificationParams)],
             ctypes.c_int,  # 返回 1 成功，0 失败
         )
+
+        self._bind_p3_functions()
+
+    def _bind_p3_functions(self) -> None:
+        """Bind JadeView 2.x extended functions (tray/menu/hotkey/clipboard/...)"""
+        u32 = ctypes.c_uint32
+        i32 = ctypes.c_int
+        cp = ctypes.c_char_p
+        sz = ctypes.c_size_t
+
+        # ---- System tray ----
+        self._try_bind("tray_create", [], u32)
+        self._try_bind("tray_destroy", [u32], i32)
+        self._try_bind("tray_set_visible", [u32, i32], i32)
+        self._try_bind("tray_set_tooltip", [u32, cp], i32)
+        self._try_bind("tray_set_icon_from_file", [u32, cp], i32)
+        self._try_bind(
+            "tray_set_menu_items",
+            [u32, ctypes.POINTER(TrayMenuItemDesc), u32],
+            i32,
+        )
+        self._try_bind(
+            "set_tray_icon_from_data",
+            [u32, ctypes.POINTER(ctypes.c_uint8), u32],
+            i32,
+        )
+
+        # ---- Native / context menu ----
+        self._try_bind("jade_menu_item_create", [cp, i32, u32, i32], u32)
+        self._try_bind("jade_menu_item_set_enabled", [u32, i32], i32)
+        self._try_bind("jade_menu_item_set_checked", [u32, i32], i32)
+        self._try_bind("jade_menu_item_destroy", [u32], i32)
+        self._try_bind(
+            "jade_set_context_menu_items",
+            [u32, ctypes.POINTER(u32), i32],
+            i32,
+        )
+
+        # ---- Global hotkeys ----
+        self._try_bind("register_global_hotkey", [u32, u32], u32)
+        self._try_bind("unregister_global_hotkey", [u32], i32)
+
+        # ---- Clipboard ----
+        self._try_bind("clipboard_read_text", [cp, i32], i32)
+        self._try_bind("clipboard_write_text", [cp], i32)
+
+        # ---- Window extras ----
+        self._try_bind("get_window_hwnd", [u32], sz)
+        self._try_bind("get_window_bounds", [u32, cp, i32], i32)
+        self._try_bind("set_window_ignore_cursor_events", [u32, i32], i32)
+        self._try_bind("set_window_progress", [u32, i32, i32], i32)
+        self._try_bind("flash_window", [u32, u32], i32)
+        self._try_bind("open_devtools", [u32], i32)
+        self._try_bind("close_devtools", [u32], i32)
+        self._try_bind("is_devtools_open", [u32], i32)
+        self._try_bind("clear_browsing_data", [u32], i32)
+        self._try_bind("show_about_dialog", [u32], i32)
+        self._try_bind("set_titlebar_overlay_style", [u32, i32, cp, cp], i32)
+        self._try_bind(
+            "create_borderless_webview_window",
+            [cp, ctypes.POINTER(WebViewSettings)],
+            u32,
+        )
+
+        # ---- System info ----
+        self._try_bind("get_displays_info", [cp, sz], i32)
+        self._try_bind("getLocale", [cp, sz], i32)
+        self._try_bind("getPath", [cp, cp, sz], i32)
+        self._try_bind("get_cursor_position", [cp, i32], i32)
+        self._try_bind("clear_data_directory", [cp], i32)
+
+        # ---- Printing ----
+        self._try_bind("jade_print", [u32], i32)
+        self._try_bind("jade_print_dialog", [cp], i32)
+        self._try_bind("jade_get_printer_list", [cp, i32], i32)
+
+        # ---- URL scheme / file association ----
+        self._try_bind("register_url_scheme", [cp], i32)
+        self._try_bind("unregister_url_scheme", [cp], i32)
+        self._try_bind("register_file_association", [cp, cp], i32)
+        self._try_bind("unregister_file_association", [cp], i32)
+
+        # ---- Secure resources (jade://) ----
+        self._try_bind("register_resource", [cp, u32, u32, cp, sz], i32)
+        self._try_bind("unregister_resource", [cp], i32)
+        self._try_bind("clear_window_resources", [u32], i32)
 
     def is_loaded(self) -> bool:
         """Check if DLL is loaded"""

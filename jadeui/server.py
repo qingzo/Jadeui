@@ -41,14 +41,21 @@ class LocalServer:
         self._url: Optional[str] = None
         self._running = False
 
-    def start(self, app_name: str = "app", root_path: str = "web") -> str:
-        """Start the local server
+    def start(
+        self, app_name: str = "app", root_path: str = "web", hot_reload: bool = False
+    ) -> str:
+        """Start the local protocol service
+
+        JadeView 2.x: 底层 ``create_local_server`` 已改名 ``set_protocol_service_path``，
+        不再需要 ``app_name``，并新增 ``hot_reload``（热重载，仅文件系统模式有效）。
+        ``app_name`` 参数保留用于向后兼容，不再传给底层。
 
         Args:
-            app_name: Application name identifier
+            app_name: 应用标识（兼容保留，底层不再使用）
             root_path: Root directory to serve files from.
                       If relative, resolved relative to the caller's directory.
                       Default: "web"
+            hot_reload: 是否启用热重载（修改文件自动刷新）
 
         Returns:
             Server URL if successful, file:// URL as fallback
@@ -78,14 +85,14 @@ class LocalServer:
         self._root_path = os.path.abspath(root_path)
         self._app_name = app_name
 
-        # Try to create local server
+        # Try to start the protocol service (JadeView 2.x: set_protocol_service_path)
         url_buffer = ctypes.create_string_buffer(128)
 
-        result = self.dll_manager.create_local_server(
+        result = self.dll_manager.set_protocol_service_path(
             self._root_path.encode("utf-8"),
-            app_name.encode("utf-8"),
             url_buffer,
             ctypes.sizeof(url_buffer),
+            1 if hot_reload else 0,
         )
 
         if result == 1:
