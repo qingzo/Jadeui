@@ -19,6 +19,6 @@ app.mount('#app')
 
 // 通知 JadeUI 后端准备好了
 if (window.jade) {
-    window.jade.ipcSend('router:ready', '')
+    window.jade.invoke('router:ready', '')
 }
 

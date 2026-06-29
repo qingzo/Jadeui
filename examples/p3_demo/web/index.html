@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JadeUI P3 Demo</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: "Segoe UI", system-ui, sans-serif;
+      background: #f5f6f8; color: #1c1e21; padding: 28px;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #1e1f22; color: #e7e9ea; }
+      .card { background: #2b2d31 !important; }
+      pre { background: #1a1b1e !important; }
+      button { background: #3a3d44 !important; color: #e7e9ea !important; }
+    }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    p.sub { margin: 0 0 20px; opacity: .7; font-size: 13px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+    .card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    h2 { font-size: 13px; margin: 0 0 10px; opacity: .65; text-transform: uppercase; letter-spacing: .04em; }
+    button {
+      width: 100%; border: 0; border-radius: 8px; padding: 9px 10px; margin-bottom: 6px;
+      background: #e9ebef; cursor: pointer; font-size: 13px; transition: filter .15s;
+    }
+    button:hover { filter: brightness(.94); }
+    button.primary { background: #3b82f6; color: #fff; }
+    pre { background: #f0f1f3; border-radius: 8px; padding: 12px; font-size: 12px; overflow: auto; max-height: 180px; white-space: pre-wrap; }
+    .row { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <h1>JadeUI 2.2.4 · P3 能力演示</h1>
+  <p class="sub">点按钮测试新增能力 · 全局热键 <b>Ctrl+Alt+J</b> 可在任意界面触发任务栏闪烁</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>窗口缩放</h2>
+      <button onclick="call('zoomIn')">放大 130%</button>
+      <button onclick="call('zoomReset')">复位 100%</button>
+    </div>
+    <div class="card">
+      <h2>开发者工具</h2>
+      <button onclick="call('toggleDevtools')">切换 DevTools</button>
+    </div>
+    <div class="card">
+      <h2>任务栏</h2>
+      <button onclick="call('progress')">显示进度 66%</button>
+      <button onclick="call('flash')">闪烁图标</button>
+    </div>
+    <div class="card">
+      <h2>剪贴板</h2>
+      <button class="primary" onclick="clipWrite()">写入剪贴板</button>
+      <button onclick="clipRead()">读取剪贴板</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2>系统信息</h2>
+      <button onclick="sysInfo()">读取系统信息</button>
+      <pre id="out">点击上方按钮查看结果…</pre>
+    </div>
+  </div>
+
+  <script>
+    const out = document.getElementById('out');
+    function log(o) { out.textContent = typeof o === 'string' ? o : JSON.stringify(o, null, 2); }
+
+    // jade.invoke 的返回值可能是字符串或已解析的对象，统一处理
+    function parseResult(result) {
+      if (typeof result === 'string') {
+        try { return JSON.parse(result); } catch (e) { return result; }
+      }
+      return result;
+    }
+
+    async function call(channel, payload = '') {
+      try {
+        const r = await jade.invoke(channel, payload);
+        log({ channel, result: parseResult(r) });
+      } catch (e) { log('错误: ' + e); }
+    }
+    async function clipWrite() {
+      try {
+        await jade.invoke('clipWrite', '来自 JadeUI 2.2.4 的剪贴板内容 ✓');
+        log('已写入剪贴板，点「读取剪贴板」验证');
+      } catch (e) { log('错误: ' + e); }
+    }
+    async function clipRead() {
+      try {
+        const data = parseResult(await jade.invoke('clipRead', ''));
+        log({ clipboard: data.text });
+      } catch (e) { log('错误: ' + e); }
+    }
+    async function sysInfo() {
+      try {
+        log(parseResult(await jade.invoke('sysInfo', '')));
+      } catch (e) { log('错误: ' + e); }
+    }
+  </script>
+</body>
+</html>
