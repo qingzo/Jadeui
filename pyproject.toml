@@ -1,6 +1,6 @@
 [project]
 name = "jadeui"
-version = "1.3.0"
+version = "2.3.0b9"
 description = "Python SDK for JadeView - Create desktop applications with WebView"
 readme = "README.md"
 license = {text = "MIT"}

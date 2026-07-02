@@ -128,6 +128,9 @@ class JadeUIApp(EventEmitter):
         enable_dev_tools: bool = False,
         log_file: Optional[str] = None,
         data_directory: Optional[str] = None,
+        app_name: Optional[str] = None,
+        app_signature: Optional[str] = None,
+        single_instance: bool = False,
     ) -> "JadeUIApp":
         """Initialize the JadeUI application
 
@@ -136,6 +139,11 @@ class JadeUIApp(EventEmitter):
             log_file: Path to log file (None disables file logging)
             data_directory: WebView data directory
                            (None uses default: %LOCALAPPDATA%/JadeUI/<random>)
+            app_name: Application name (JadeView 2.x; None 时自动推导).
+                      用于 JAPK 签名包校验与通知等。
+            app_signature: JAPK 签名包的 app_signature (JadeView 2.x，可选)
+            single_instance: 是否启用单实例模式 (JadeView 2.x).
+                      第二个实例启动时会触发 ``second-instance`` 事件。
 
         Returns:
             Self for chaining
@@ -174,11 +182,26 @@ class JadeUIApp(EventEmitter):
             self.dll_manager.load()
 
             # Initialize JadeView DLL
-            # API: JadeView_init(enable_devtools, log_path, data_directory)
+            # API (JadeView 2.x): JadeView_init(enable_devmod, log_path, data_directory,
+            #                                   app_name, app_signature, single_instance)
+            if app_name is None:
+                app_name = self._get_app_name()
+            self._app_name = app_name
+            # JadeView 2.x 要求 app_signature 必须非空、合法 UTF-8，且 trim 后 >= 6 个字符。
+            # 非 JAPK 应用没有专门签名时，回退使用 app_name 作为占位签名，并保证长度达标。
+            if not app_signature:
+                app_signature = app_name
+            if len((app_signature or "").strip()) < 6:
+                # 用固定后缀补足，保证 trim 后 >= 6 字符
+                app_signature = f"{(app_signature or '').strip()}_jadeui_app"
+            self._app_signature = app_signature
             result = self.dll_manager.JadeView_init(
                 1 if enable_dev_tools else 0,
                 log_file.encode("utf-8") if log_file else None,
                 data_directory.encode("utf-8") if data_directory else None,
+                app_name.encode("utf-8"),
+                app_signature.encode("utf-8"),
+                1 if single_instance else 0,
             )
 
             if result == 0:
@@ -230,11 +253,23 @@ class JadeUIApp(EventEmitter):
         @AppReadyCallback
         def app_ready_callback(window_id: int, event_data: ctypes.c_char_p):
             data_str = event_data.decode("utf-8") if event_data else ""
-            # app-ready 事件
-            if data_str.startswith("success") or "app-ready" in data_str:
+            # JadeView 2.x: app-ready 事件数据为 JSON, 如 {"ok":true,"message":"success"}；
+            # 旧版本为纯文本（"success" / 错误描述）。两种格式都要兼容。
+            ok = False
+            reason = data_str
+            try:
+                import json as _json
+
+                d = _json.loads(data_str)
+                if isinstance(d, dict):
+                    ok = bool(d.get("ok", False))
+                    reason = d.get("message", data_str)
+            except (ValueError, TypeError):
+                ok = data_str.startswith("success") or "app-ready" in data_str
+            if ok:
                 self._on_app_ready(1, "success")
             else:
-                self._on_app_ready(0, data_str)
+                self._on_app_ready(0, reason)
 
         # Create window-all-closed callback (返回 void)
         @WindowAllClosedCallback
@@ -351,11 +386,21 @@ class JadeUIApp(EventEmitter):
         except Exception as e:
             logger.warning(f"Could not set Windows console handler: {e}")
 
+    def _dll_exit(self) -> None:
+        """清理所有窗口并结束消息循环
+
+        JadeView 2.x 推荐 ``jadeview_exit``；旧 DLL 回退到 ``cleanup_all_windows``。
+        """
+        if self.dll_manager.has_function("jadeview_exit"):
+            self.dll_manager.jadeview_exit()
+        else:
+            self.dll_manager.cleanup_all_windows()
+
     def _force_quit(self) -> None:
         """强制退出应用"""
         try:
             # 清理窗口
-            self.dll_manager.cleanup_all_windows()
+            self._dll_exit()
 
             # Windows: 发送退出消息到消息循环
             if sys.platform == "win32":
@@ -389,7 +434,7 @@ class JadeUIApp(EventEmitter):
             return
 
         try:
-            self.dll_manager.cleanup_all_windows()
+            self._dll_exit()
             logger.info("Application resources cleaned up")
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")

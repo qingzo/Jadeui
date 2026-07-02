@@ -43,9 +43,14 @@ With IPC:
 
 from . import utils
 from .app import JadeUIApp
+from .clipboard import Clipboard
 from .core.types import RGBA, WebViewSettings, WebViewWindowOptions
 from .dialog import Dialog, MessageBoxType, OpenDialogProperties
+from .system import System
+from .storage import Storage
 from .downloader import (
+    DLL_API_VERSION,
+    DLL_BUILD,
     VERSION as DLL_VERSION,
 )
 from .downloader import (
@@ -55,6 +60,9 @@ from .downloader import (
     get_architecture,
 )
 from .events import EventEmitter, Events
+from .hotkey import HotKey
+from .menu import Menu
+from .tray import Tray
 from .exceptions import (
     DLLLoadError,
     InitializationError,
@@ -69,7 +77,7 @@ from .router import Router
 from .server import LocalServer
 from .window import Backdrop, Theme, Window
 
-__version__ = "1.3.0"
+__version__ = "2.3.0b9"
 __author__ = "JadeView Team"
 __license__ = "MIT"
 
@@ -86,6 +94,13 @@ __all__ = [
     "OpenDialogProperties",
     # Notification API (v1.3.0+)
     "Notification",
+    # P3 APIs (JadeView 2.x)
+    "Clipboard",
+    "System",
+    "Storage",
+    "HotKey",
+    "Tray",
+    "Menu",
     # Constants
     "Theme",
     "Backdrop",
@@ -108,7 +123,9 @@ __all__ = [
     "ensure_dll",
     "find_dll",
     "get_architecture",
+    "DLL_API_VERSION",
     "DLL_VERSION",
+    "DLL_BUILD",
     # Utilities
     "utils",
     # Memory management (v1.0+)

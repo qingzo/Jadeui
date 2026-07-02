@@ -19,6 +19,8 @@ Window(title="My App", url="https://example.com").run()
 | [backdrop_demo](./backdrop_demo/) | Windows 11 Mica/Acrylic 背景效果 | ⭐⭐ |
 | [dialog_notification_demo](./dialog_notification_demo/) | **对话框和通知** (v1.3.0+) | ⭐⭐ |
 | [router_demo](./router_demo/) | 内置路由系统，多页面应用 | ⭐⭐⭐ |
+| [p3_demo](./p3_demo/) | 系统托盘、全局热键、剪贴板、系统信息、窗口增强 (v2.2.4+) | ⭐⭐⭐ |
+| [v23_demo](./v23_demo/) | YAML 存储、窗口层级、文件图标、NTP、拖拽事件 (v2.3.0-beta.9+) | ⭐⭐⭐ |
 | [custom_template](./custom_template/) | 自定义 HTML 模板 | ⭐⭐⭐ |
 | [vue_app](./vue_app/) | Vue.js 前端框架集成 | ⭐⭐⭐ |
 

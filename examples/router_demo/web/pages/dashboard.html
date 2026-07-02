@@ -17,8 +17,8 @@
 
 <script>
     // 监听响应
-    jade.invoke('get_stats:response', function(result) {
-        const stats = JSON.parse(result);
+    jade.on('get_stats:response', function(result) {
+        const stats = (typeof result==='string'?JSON.parse(result):result);
         document.getElementById('server-time').textContent = '服务器时间: ' + stats.server_time;
         document.getElementById('stat-visits').textContent = stats.today_visits.toLocaleString();
         document.getElementById('stat-online').textContent = stats.online_users;
@@ -26,5 +26,5 @@
     });
 
     // 发送请求
-    jade.ipcSend('get_stats', '');
+    jade.invoke('get_stats', '');
 </script>

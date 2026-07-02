@@ -6,8 +6,8 @@
     const userId = router.params.id;
 
     // 监听响应
-    jade.invoke('get_user:response', function(result) {
-        const user = JSON.parse(result);
+    jade.on('get_user:response', function(result) {
+        const user = (typeof result==='string'?JSON.parse(result):result);
         const container = document.getElementById('user-detail');
 
         if (user.error) {
@@ -46,5 +46,5 @@
     });
 
     // 发送请求
-    jade.ipcSend('get_user', userId);
+    jade.invoke('get_user', userId);
 </script>

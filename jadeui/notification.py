@@ -195,12 +195,21 @@ class Notification:
 
     @classmethod
     def _do_register(cls) -> bool:
-        """执行注册"""
+        """执行注册
+
+        JadeView 2.x: ``set_notification_app_registry`` 已移除，通知应用注册
+        并入 ``JadeView_init(app_name)``。此时无需单独注册，直接视为已注册。
+        旧版 DLL 仍走显式注册路径。
+        """
         dll = DLLManager()
 
         if not dll.has_function("set_notification_app_registry"):
-            logger.warning("set_notification_app_registry 不可用，需要 JadeView 1.3.0+")
-            return False
+            logger.debug(
+                "set_notification_app_registry 不存在（JadeView 2.x），"
+                "通知注册已并入 JadeView_init，跳过显式注册"
+            )
+            cls._registered = True
+            return True
 
         result = dll.set_notification_app_registry(
             cls._app_name.encode("utf-8"),
@@ -305,11 +314,12 @@ class Notification:
         final_icon = icon or cls._app_icon
 
         # 创建参数结构体
+        # JadeView 2.x: timeout=-1 表示系统默认，<=0 统一映射为 -1
         params = NotificationParams(
             summary=summary.encode("utf-8"),
             body=body.encode("utf-8") if body else None,
             icon=final_icon.encode("utf-8") if final_icon else None,
-            timeout=timeout,
+            timeout=timeout if timeout > 0 else -1,
             button1=button1.encode("utf-8") if button1 else None,
             button2=button2.encode("utf-8") if button2 else None,
             text3=text3.encode("utf-8") if text3 else None,
