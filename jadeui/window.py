@@ -199,6 +199,8 @@ class Window(EventEmitter):
                 - focus (bool): Focus window on creation (default: True)
                 - hide_window (bool): Create hidden (default: False)
                 - use_page_icon (bool): Use page favicon as window icon (default: True)
+                - skip_taskbar (bool): Hide from taskbar/Alt-Tab (default: False)
+                - no_activate (bool): Show/click without activating window (default: False)
                 - autoplay (bool): Allow media autoplay (default: False)
                 - disable_right_click (bool): Disable right-click menu (default: True)
                 - user_agent (str): Custom user agent string
@@ -246,6 +248,8 @@ class Window(EventEmitter):
         self._options.setdefault("frame_style", None)  # JadeView 2.x: 显式覆盖 titlebar/borderless
         self._options.setdefault("content_protection", False)
         self._options.setdefault("auto_save_state", False)  # JadeView 2.x: 自动保存窗口状态
+        self._options.setdefault("skip_taskbar", False)  # JadeView 2.3: 不进任务栏/Alt-Tab
+        self._options.setdefault("no_activate", False)  # JadeView 2.3: 不抢焦点
 
         # 参数冲突检测：borderless 与 remove_titlebar/transparent 不能同时使用
         # 参考：JadeView DLL v1.2.0 已知问题
@@ -340,7 +344,7 @@ class Window(EventEmitter):
         Returns:
             The callback function (for decorator usage)
         """
-        # file-drop 有特殊的回调签名，单独处理
+        # file-drop / drag-drop 有特殊的回调签名，单独处理
         if event == "file-drop":
             if callback is None:
 
@@ -351,6 +355,18 @@ class Window(EventEmitter):
                 return decorator
             else:
                 self._register_file_drop_handler(callback)
+                return callback
+
+        if event == "drag-drop":
+            if callback is None:
+
+                def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+                    self._register_drag_drop_handler(fn)
+                    return fn
+
+                return decorator
+            else:
+                self._register_drag_drop_handler(callback)
                 return callback
 
         # 其他需要通过 jade_on 注册的事件
@@ -634,6 +650,20 @@ class Window(EventEmitter):
 
     # ==================== Internal Event Registration ====================
 
+    def _callback_result_to_ptr(self, result: Any) -> Optional[int]:
+        """Convert a Python callback return value to a JadeView callback pointer."""
+        if result is None or result is False or result == 0:
+            return None
+        if result is True:
+            data = b"1"
+        elif isinstance(result, bytes):
+            data = result
+        else:
+            data = str(result).encode("utf-8")
+        if self.dll_manager.has_function("jade_text_create"):
+            return self.dll_manager.jade_text_create(data)
+        return None
+
     def _register_jade_on_event(self, event: str, callback: Callable[..., Any]) -> None:
         """通用的 jade_on 事件注册器
 
@@ -653,9 +683,10 @@ class Window(EventEmitter):
         # 获取预编译的参数提取器（O(1) 查找）
         extractor = _EVENT_EXTRACTORS.get(event)
 
-        # 创建 ctypes 回调 (返回 void)
+        # 创建 ctypes 回调 (返回 void*)
         @GenericWindowEventCallback
         def event_callback(window_id: int, json_data: bytes):
+            response_ptr = None
             try:
                 # 解析 JSON
                 data_str = json_data.decode("utf-8") if json_data else "{}"
@@ -672,11 +703,16 @@ class Window(EventEmitter):
                 # 调用所有监听器
                 for cb in list(self._listeners.get(event, [])):
                     try:
-                        cb(*args)
+                        result = cb(*args)
+                        ptr = self._callback_result_to_ptr(result)
+                        if ptr:
+                            response_ptr = ptr
+                            break
                     except Exception as e:
                         logger.error(f"Error in {event} callback: {e}")
             except Exception as e:
                 logger.error(f"Error in {event} event handler: {e}")
+            return response_ptr
 
         # 保存引用防止垃圾回收
         self._callbacks.append(event_callback)
@@ -695,29 +731,28 @@ class Window(EventEmitter):
         self._registered_jade_events.add(event)
         logger.info(f"{event} event handler registered with DLL (callback_id={callback_id})")
 
-    def _register_file_drop_handler(self, callback: Callable[..., Any]) -> None:
-        """注册文件拖放事件处理器到 DLL
+    def _register_drag_drop_handler(self, callback: Callable[..., Any]) -> None:
+        """注册底层 drag-drop 事件处理器。
 
-        JadeView 2.x: 原生事件名为 ``drag-drop``（含 enter/over/drop/leave 阶段），
-        旧版为 ``file-drop``。这里注册 ``drag-drop``，并在收到 ``type=="drop"`` 时
-        以兼容的 ``file-drop`` Python 事件分发给用户回调。
+        回调接收原始事件字典。v2.3 起，enter/drop 阶段返回 True/非空值会
+        回传给原生层，用于拒绝拖拽或消费 drop。
         """
-        # 添加到本地监听器（对外仍用 file-drop 事件名，保持向后兼容）
-        self._listeners["file-drop"].append(callback)
+        self._listeners["drag-drop"].append(callback)
+        self._ensure_drag_drop_handler()
 
-        # 只注册一次到 DLL
+    def _ensure_drag_drop_handler(self) -> None:
+        """Ensure the native drag-drop handler is registered exactly once."""
         if "drag-drop" in self._registered_jade_events:
             return
 
-        # 创建 ctypes 回调 (返回 void)
         @FileDropCallback
         def drag_drop_callback(window_id: int, json_data: bytes):
-            self._on_file_drop(window_id, json_data)
+            return self._on_file_drop(window_id, json_data)
 
         # 保存引用防止垃圾回收
         self._callbacks.append(drag_drop_callback)
 
-        # 通过 jade_on 注册到 DLL (返回 callback_id)
+        # 通过 jade_on 注册到 DLL (v1.0+: 返回 callback_id)
         callback_id = self.dll_manager.jade_on(
             b"drag-drop",
             ctypes.cast(drag_drop_callback, ctypes.c_void_p),
@@ -730,6 +765,17 @@ class Window(EventEmitter):
 
         self._registered_jade_events.add("drag-drop")
         logger.info(f"drag-drop event handler registered with DLL (callback_id={callback_id})")
+
+    def _register_file_drop_handler(self, callback: Callable[..., Any]) -> None:
+        """注册文件拖放事件处理器到 DLL
+
+        JadeView 2.x: 原生事件名为 ``drag-drop``（含 enter/over/drop/leave 阶段），
+        旧版为 ``file-drop``。这里注册 ``drag-drop``，并在收到 ``type=="drop"`` 时
+        以兼容的 ``file-drop`` Python 事件分发给用户回调。
+        """
+        # 添加到本地监听器（对外仍用 file-drop 事件名，保持向后兼容）
+        self._listeners["file-drop"].append(callback)
+        self._ensure_drag_drop_handler()
 
     # ==================== Window Lifecycle ====================
 
@@ -1084,6 +1130,29 @@ class Window(EventEmitter):
             self.dll_manager.set_window_always_on_top(self.id, 1 if on_top else 0)
         return self
 
+    def set_skip_taskbar(self, skip: bool = True) -> "Window":
+        """设置窗口不显示在任务栏/Alt-Tab 中（JadeView 2.3+）。"""
+        self._options["skip_taskbar"] = skip
+        if self.id is not None and self.dll_manager.has_function("set_window_skip_taskbar"):
+            self.dll_manager.set_window_skip_taskbar(self.id, 1 if skip else 0)
+        return self
+
+    def set_no_activate(self, no_activate: bool = True) -> "Window":
+        """设置窗口显示或点击时不抢焦点（JadeView 2.3+）。"""
+        self._options["no_activate"] = no_activate
+        if self.id is not None and self.dll_manager.has_function("set_window_no_activate"):
+            self.dll_manager.set_window_no_activate(self.id, 1 if no_activate else 0)
+        return self
+
+    def set_level(self, level: str) -> "Window":
+        """设置窗口层级：topmost / normal / bottom / desktop（JadeView 2.3+）。"""
+        allowed = {"topmost", "normal", "bottom", "desktop"}
+        if level not in allowed:
+            raise ValueError(f"Unsupported window level: {level!r}")
+        if self.id is not None and self.dll_manager.has_function("set_window_level"):
+            self.dll_manager.set_window_level(self.id, level.encode("utf-8"))
+        return self
+
     def set_resizable(self, resizable: bool) -> "Window":
         """Set whether window is resizable
 
@@ -1197,8 +1266,7 @@ class Window(EventEmitter):
     def get_hwnd(self) -> int:
         """获取原生窗口句柄 HWND
 
-        注意：仅 ``create_borderless_webview_window`` 创建的无边框窗口返回有效句柄，
-        标准窗口返回 0。
+        JadeView 2.3 起，所有创建方式的窗口都可返回有效句柄。
         """
         if self.id is not None and self.dll_manager.has_function("get_window_hwnd"):
             return int(self.dll_manager.get_window_hwnd(self.id))
@@ -1546,6 +1614,8 @@ class Window(EventEmitter):
             use_page_icon=self._options.get("use_page_icon", True),
             content_protection=self._options.get("content_protection", False),
             auto_save_state=self._options.get("auto_save_state", False),  # JadeView 2.x
+            skip_taskbar=self._options.get("skip_taskbar", False),
+            no_activate=self._options.get("no_activate", False),
         )
 
         # Prepare WebView settings
@@ -1691,7 +1761,7 @@ class Window(EventEmitter):
             self.emit("closed")
             self.id = None
 
-    def _on_file_drop(self, window_id: int, json_data: bytes) -> None:
+    def _on_file_drop(self, window_id: int, json_data: bytes):
         """Handle drag-drop events
 
         JadeView 2.x 数据格式:
@@ -1711,15 +1781,34 @@ class Window(EventEmitter):
             y = data.get("y", 0)
             paths = data.get("paths", data.get("files", []))
 
+            response_ptr = None
+
             # 透传底层 drag-drop 事件（enter/over/drop/leave）
-            self.emit("drag-drop", data)
+            for cb in list(self._listeners.get("drag-drop", [])):
+                try:
+                    ptr = self._callback_result_to_ptr(cb(data))
+                    if ptr:
+                        response_ptr = ptr
+                        break
+                except Exception as e:
+                    logger.error(f"Error in drag-drop callback: {e}")
 
             # 仅在 drop 阶段（或旧格式无 type）时触发兼容的 file-drop 回调
-            if phase is None or phase == "drop":
+            if response_ptr is None and (phase is None or phase == "drop"):
                 logger.debug(f"File drop: window={window_id}, paths={paths}, x={x}, y={y}")
-                self.emit("file-drop", paths, x, y)
+                for cb in list(self._listeners.get("file-drop", [])):
+                    try:
+                        ptr = self._callback_result_to_ptr(cb(paths, x, y))
+                        if ptr:
+                            response_ptr = ptr
+                            break
+                    except Exception as e:
+                        logger.error(f"Error in file-drop callback: {e}")
+
+            return response_ptr or 0
         except Exception as e:
             logger.error(f"Error parsing drag-drop data: {e}")
+            return 0
 
     # ==================== Static Methods ====================
 
@@ -1746,6 +1835,16 @@ class Window(EventEmitter):
             Window instance or None
         """
         return Window._windows.get(window_id)
+
+    @staticmethod
+    def get_id_from_hwnd(hwnd: int) -> int:
+        """根据原生 HWND 获取 JadeView window_id（JadeView 2.3+）。"""
+        dll = DLLManager()
+        if not dll.is_loaded():
+            dll.load()
+        if dll.has_function("get_window_id"):
+            return int(dll.get_window_id(hwnd))
+        return 0
 
     @staticmethod
     def get_all_windows() -> list["Window"]:

@@ -113,3 +113,58 @@ class System:
     def jadeview_version() -> Optional[str]:
         """JadeView 原生 DLL 版本（语义版本 + 构建号）"""
         return _read_into_buffer("jadeview_version", 128)
+
+    @staticmethod
+    def set_login_autostart(enable: bool = True, args: Optional[str] = None) -> bool:
+        """启用或取消开机自启（JadeView 2.3+）。"""
+        dll = _dll()
+        if not dll.has_function("set_login_autostart"):
+            logger.warning("set_login_autostart 不可用，需要 JadeView 2.3+")
+            return False
+        args_bytes = args.encode("utf-8") if args else None
+        return dll.set_login_autostart(1 if enable else 0, args_bytes) == 1
+
+    @staticmethod
+    def get_login_autostart() -> bool:
+        """查询是否已启用开机自启（JadeView 2.3+）。"""
+        dll = _dll()
+        if not dll.has_function("get_login_autostart"):
+            return False
+        return dll.get_login_autostart() == 1
+
+    @staticmethod
+    def get_file_icon(
+        path: str,
+        size: int = 48,
+        window_id: int = 0,
+        ttl_seconds: int = 0,
+        buffer_size: int = 4096,
+    ) -> Optional[str]:
+        """提取文件/目录系统图标，返回 ``jade://`` 安全资源 URL（JadeView 2.3+）。"""
+        dll = _dll()
+        if not dll.has_function("get_file_icon"):
+            logger.warning("get_file_icon 不可用，需要 JadeView 2.3+")
+            return None
+        buf = ctypes.create_string_buffer(buffer_size)
+        result = dll.get_file_icon(
+            path.encode("utf-8"),
+            int(size),
+            int(window_id),
+            int(ttl_seconds),
+            buf,
+            buffer_size,
+        )
+        if result != 1:
+            return None
+        return buf.value.decode("utf-8", "replace")
+
+    @staticmethod
+    def ntp_now(server: Optional[str] = None) -> Optional[int]:
+        """获取 NTP UTC 毫秒时间戳（JadeView 2.3+）。网络失败返回 ``None``。"""
+        dll = _dll()
+        if not dll.has_function("jade_ntp_now"):
+            logger.warning("jade_ntp_now 不可用，需要 JadeView 2.3+")
+            return None
+        server_bytes = server.encode("utf-8") if server else None
+        result = int(dll.jade_ntp_now(server_bytes))
+        return result if result >= 0 else None

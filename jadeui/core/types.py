@@ -23,10 +23,10 @@ if sys.platform == "win32":
 else:
     _FUNCTYPE = ctypes.CFUNCTYPE
 
-# 事件回调: window_id, event_data -> void
+# 事件回调: window_id, event_data -> void*
 # 用于通过 jade_on 注册的所有事件 (app-ready, load, file-drop 等)
 GenericWindowEventCallback = _FUNCTYPE(
-    None,  # 返回 void
+    ctypes.c_void_p,
     ctypes.c_uint,
     ctypes.c_char_p,
 )
@@ -113,7 +113,7 @@ def rgba_to_hex(color: object) -> Optional[bytes]:
 class WebViewWindowOptions(ctypes.Structure):
     """WebView window configuration options
 
-    字段顺序与 JadeView 2.2.4 原生头文件 ``WebViewWindowOptions`` 完全一致。
+    字段顺序与 JadeView 2.3.0-beta.9 原生头文件 ``WebViewWindowOptions`` 完全一致。
 
     与 1.x 的破坏性变更:
         - ``remove_titlebar`` + ``borderless`` 合并为单一 ``frame_style``
@@ -121,6 +121,7 @@ class WebViewWindowOptions(ctypes.Structure):
         - ``background_color`` 由 RGBA 结构体改为 ``#RRGGBBAA`` 字符串指针
         - 移除 ``no_center``
         - 新增 ``auto_save_state``
+        - 2.3.0-beta.6 末尾追加 ``skip_taskbar`` / ``no_activate``
     """
 
     _fields_ = [
@@ -148,6 +149,8 @@ class WebViewWindowOptions(ctypes.Structure):
         ("use_page_icon", ctypes.c_int),
         ("content_protection", ctypes.c_int),  # 内容保护（禁止截图）
         ("auto_save_state", ctypes.c_int),  # JadeView 2.x: 自动保存窗口状态
+        ("skip_taskbar", ctypes.c_int),  # JadeView 2.3: 不进任务栏/Alt-Tab
+        ("no_activate", ctypes.c_int),  # JadeView 2.3: 显示/点击时不抢焦点
     ]
 
     def __init__(
@@ -176,6 +179,8 @@ class WebViewWindowOptions(ctypes.Structure):
         use_page_icon: bool = True,
         content_protection: bool = False,
         auto_save_state: bool = False,
+        skip_taskbar: bool = False,
+        no_activate: bool = False,
     ):
         super().__init__(
             title,
@@ -202,6 +207,8 @@ class WebViewWindowOptions(ctypes.Structure):
             int(use_page_icon),
             int(content_protection),
             int(auto_save_state),
+            int(skip_taskbar),
+            int(no_activate),
         )
 
 

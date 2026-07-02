@@ -337,6 +337,9 @@ class DLLManager:
 
         # Window focus (正确函数名为 set_window_focus)
         self._try_bind("set_window_focus", [ctypes.c_uint32], ctypes.c_int)
+        self._try_bind("set_window_skip_taskbar", [ctypes.c_uint32, ctypes.c_int], ctypes.c_int)
+        self._try_bind("set_window_no_activate", [ctypes.c_uint32, ctypes.c_int], ctypes.c_int)
+        self._try_bind("set_window_level", [ctypes.c_uint32, ctypes.c_char_p], ctypes.c_int)
         self._try_bind(
             "set_window_fullscreen",
             [ctypes.c_uint32, ctypes.c_int],
@@ -366,6 +369,18 @@ class DLLManager:
         )
 
         # ==================== New in JadeView 2.x ====================
+        # JAPK 签名 / 加载
+        self._try_bind("JadeView_set_public_key", [ctypes.c_char_p], ctypes.c_int)
+        self._try_bind(
+            "JadeView_load_from_bytes",
+            [ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t],
+            ctypes.c_int,
+        )
+        self._try_bind("JadeView_is_loaded", [], ctypes.c_int)
+        self._try_bind("JadeView_get_app_signature", [], ctypes.c_void_p)
+        self._try_bind("JadeView_get_signature_info", [], ctypes.c_void_p)
+        self._try_bind("JadeView_unload", [], ctypes.c_int)
+
         # 动态内容保护、缩放、重绘、启用/禁用窗口
         self._try_bind("set_content_protection", [ctypes.c_uint32, ctypes.c_int], ctypes.c_int)
         self._try_bind("set_webview_zoom", [ctypes.c_uint32, ctypes.c_double], ctypes.c_int)
@@ -495,6 +510,7 @@ class DLLManager:
 
         # ---- Window extras ----
         self._try_bind("get_window_hwnd", [u32], sz)
+        self._try_bind("get_window_id", [sz], u32)
         self._try_bind("get_window_bounds", [u32, cp, i32], i32)
         self._try_bind("set_window_ignore_cursor_events", [u32, i32], i32)
         self._try_bind("set_window_progress", [u32, i32, i32], i32)
@@ -517,6 +533,36 @@ class DLLManager:
         self._try_bind("getPath", [cp, cp, sz], i32)
         self._try_bind("get_cursor_position", [cp, i32], i32)
         self._try_bind("clear_data_directory", [cp], i32)
+        self._try_bind("set_login_autostart", [i32, cp], i32)
+        self._try_bind("get_login_autostart", [], i32)
+        self._try_bind("get_file_icon", [cp, i32, u32, u32, cp, sz], i32)
+        self._try_bind("jade_ntp_now", [cp], ctypes.c_int64)
+        self._try_bind(
+            "smart_convert_encoding",
+            [
+                ctypes.POINTER(ctypes.c_uint8),
+                i32,
+                cp,
+                cp,
+                i32,
+                cp,
+                i32,
+            ],
+            i32,
+        )
+
+        # ---- YAML storage ----
+        self._try_bind("yaml_set", [cp, cp, cp], i32)
+        self._try_bind("yaml_get", [cp, cp, cp, sz], i32)
+        self._try_bind("yaml_set_str", [cp, cp, cp], i32)
+        self._try_bind("yaml_get_str", [cp, cp], ctypes.c_void_p)
+        self._try_bind("yaml_get_all", [cp, cp, sz], i32)
+        self._try_bind("yaml_has", [cp, cp], i32)
+        self._try_bind("yaml_delete", [cp, cp], i32)
+        self._try_bind("yaml_clear", [cp], i32)
+        self._try_bind("yaml_delete_file", [cp], i32)
+        self._try_bind("yaml_keys", [cp, cp, cp, sz], i32)
+        self._try_bind("yaml_len", [cp, cp], i32)
 
         # ---- Printing ----
         self._try_bind("jade_print", [u32], i32)

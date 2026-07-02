@@ -4,16 +4,19 @@ JadeUI DLL Downloader
 Automatically downloads the JadeView DLL from GitHub releases.
 """
 
+import json
 import logging
 import os
 import platform
+import re
 import sys
+import sysconfig
 import tempfile
 import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -21,35 +24,53 @@ logger = logging.getLogger(__name__)
 GITHUB_REPO = "JadeViewDocs/JadeView"
 GITHUB_RELEASE_URL = f"https://github.com/{GITHUB_REPO}/releases/download"
 
-# DLL 版本号（可能与 SDK 版本不同）
-# 当 SDK 修复 bug 但 DLL 未更新时，此版本保持不变
-DLL_VERSION = "2.2.4"
+# SDK 适配的 JadeView API/ABI 版本。自动更新只允许在同一 release tag
+# 内更新构建号，不跨 2.2 -> 2.3 这样的兼容性边界。
+DLL_API_VERSION = "2.3.0-beta.9"
+DLL_VERSION = DLL_API_VERSION
 
 # 构建号（JadeView 2.x 发布包文件名为 vX.Y.Z.<BUILD>）
-DLL_BUILD = "26F01"
+DLL_BUILD = "26G01"
 
 # 兼容旧代码
 VERSION = DLL_VERSION
 
 
 def get_architecture() -> str:
-    """Get system architecture
+    """Get the Python interpreter architecture.
+
+    The JadeView DLL is loaded into the Python process via ``ctypes``, so the
+    DLL architecture must match the interpreter architecture, not the OS
+    architecture. For example, 32-bit Python on 64-bit Windows must use x86.
 
     Returns:
         'x64', 'x86', or 'arm64'
     """
+    platform_tag = sysconfig.get_platform().lower()
+
+    if "arm64" in platform_tag or "aarch64" in platform_tag:
+        return "arm64"
+    if platform_tag in ("win32", "mingw"):
+        return "x86"
+    if "amd64" in platform_tag or "x86_64" in platform_tag:
+        return "x64"
+
+    # Fallback for unusual Python builds where sysconfig does not expose an
+    # architecture-specific tag.
+    is_64bit = sys.maxsize > 2**32
+    if not is_64bit:
+        return "x86"
+
     machine = platform.machine().lower()
 
     if machine in ("arm64", "aarch64"):
         return "arm64"
-    elif machine in ("amd64", "x86_64"):
+    if machine in ("amd64", "x86_64"):
         return "x64"
-    elif machine in ("x86", "i386", "i686"):
+    if machine in ("x86", "i386", "i686"):
         return "x86"
-    else:
-        # 回退：根据 Python 位数判断
-        is_64bit = sys.maxsize > 2**32
-        return "x64" if is_64bit else "x86"
+
+    return "x64"
 
 
 def get_dll_filename(arch: str) -> str:
@@ -66,7 +87,21 @@ def get_dll_filename(arch: str) -> str:
     return f"JadeView_{arch}.dll"
 
 
-def get_dist_dir_name(arch: str) -> str:
+def _build_sort_key(build: str) -> List[object]:
+    """Natural sort key for build identifiers such as ``26G01``."""
+    parts = re.split(r"(\d+)", build)
+    return [int(part) if part.isdigit() else part for part in parts if part]
+
+
+def _extract_build_from_asset_name(name: str, version: str, arch: str) -> Optional[str]:
+    prefix = f"JadeView_win_{arch}_v{version}."
+    suffix = ".zip"
+    if name.startswith(prefix) and name.endswith(suffix):
+        return name[len(prefix) : -len(suffix)]
+    return None
+
+
+def get_dist_dir_name(arch: str, version: Optional[str] = None, build: Optional[str] = None) -> str:
     """Get the local distribution directory name
 
     JadeView 2.x 发布包内文件位于根目录（无子文件夹），这里的目录名仅用于
@@ -78,7 +113,9 @@ def get_dist_dir_name(arch: str) -> str:
     Returns:
         Distribution directory name
     """
-    return f"JadeView_win_{arch}_v{DLL_VERSION}.{DLL_BUILD}"
+    version = version or DLL_VERSION
+    build = build or DLL_BUILD
+    return f"JadeView_win_{arch}_v{version}.{build}"
 
 
 def get_download_url(version: str, arch: str, build: str = DLL_BUILD) -> str:
@@ -94,6 +131,42 @@ def get_download_url(version: str, arch: str, build: str = DLL_BUILD) -> str:
     """
     zip_name = f"JadeView_win_{arch}_v{version}.{build}.zip"
     return f"{GITHUB_RELEASE_URL}/v{version}/{zip_name}"
+
+
+def get_release_assets(version: str) -> List[dict]:
+    """Read assets for a single JadeView release tag.
+
+    This intentionally queries only ``v{version}``, so it can never cross an
+    API/ABI boundary such as 2.2 -> 2.3 during automatic build updates.
+    """
+    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/tags/v{version}"
+    request = urllib.request.Request(api_url, headers={"User-Agent": f"jadeui/{version}"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    assets = data.get("assets", [])
+    return assets if isinstance(assets, list) else []
+
+
+def get_latest_build(version: Optional[str] = None, arch: Optional[str] = None) -> str:
+    """Get the latest build for ``version`` and ``arch`` within the same tag.
+
+    Falls back to ``DLL_BUILD`` when the release metadata cannot be read or no
+    matching asset exists.
+    """
+    version = version or DLL_VERSION
+    arch = arch or get_architecture()
+    try:
+        builds = []
+        for asset in get_release_assets(version):
+            name = str(asset.get("name", ""))
+            build = _extract_build_from_asset_name(name, version, arch)
+            if build:
+                builds.append(build)
+        if builds:
+            return sorted(builds, key=_build_sort_key)[-1]
+    except Exception as e:
+        logger.debug(f"Failed to query latest JadeView build: {e}")
+    return DLL_BUILD
 
 
 def get_install_dir() -> Path:
@@ -134,6 +207,7 @@ def find_dll() -> Optional[Path]:
     dist_dir = get_dist_dir_name(arch)
 
     package_dir = Path(__file__).parent
+    install_dir = get_install_dir()
 
     # Search locations (in priority order)
     search_paths = [
@@ -150,7 +224,7 @@ def find_dll() -> Optional[Path]:
         # 6. Current working directory lib
         Path.cwd() / "lib" / dist_dir / dll_name,
         # 7. User data directory (downloaded)
-        get_install_dir() / dist_dir / dll_name,
+        install_dir / dist_dir / dll_name,
     ]
 
     # Also try PyInstaller/Nuitka paths
@@ -165,6 +239,34 @@ def find_dll() -> Optional[Path]:
             logger.debug(f"Found DLL at: {path}")
             return path
 
+    # Fall back to any local build for the same API version and architecture.
+    candidate_roots = [
+        package_dir / "dll",
+        package_dir / "lib",
+        package_dir.parent / "lib",
+        package_dir.parent,
+        Path.cwd(),
+        Path.cwd() / "lib",
+        install_dir,
+    ]
+    candidates: List[Tuple[str, Path]] = []
+    pattern = f"JadeView_win_{arch}_v{DLL_VERSION}.*"
+    for root in candidate_roots:
+        if not root.exists():
+            continue
+        for dist in root.glob(pattern):
+            if not dist.is_dir():
+                continue
+            dll_path = dist / dll_name
+            if not dll_path.exists():
+                continue
+            build = dist.name.rsplit(".", 1)[-1]
+            candidates.append((build, dll_path))
+    if candidates:
+        build, path = sorted(candidates, key=lambda item: _build_sort_key(item[0]))[-1]
+        logger.debug(f"Found compatible DLL build {build} at: {path}")
+        return path
+
     return None
 
 
@@ -174,16 +276,19 @@ def download_dll(
     build: Optional[str] = None,
     install_dir: Optional[Path] = None,
     progress_callback: Optional[callable] = None,
+    latest_build: bool = True,
 ) -> Path:
     """Download the DLL from GitHub releases
 
     Args:
         version: Version to download (default: current version)
         arch: Architecture ('x64', 'x86', or 'arm64', default: auto-detect)
-        build: Build identifier (default: DLL_BUILD)
+        build: Build identifier (default: latest available build for DLL_VERSION)
         install_dir: Installation directory (default: auto)
         progress_callback: Optional callback for progress updates
             Called with (downloaded_bytes, total_bytes)
+        latest_build: If True and build is not provided, choose the latest build
+            within the same release tag.
 
     Returns:
         Path to the installed DLL
@@ -193,14 +298,14 @@ def download_dll(
     """
     version = version or DLL_VERSION
     arch = arch or get_architecture()
-    build = build or DLL_BUILD
+    build = build or (get_latest_build(version, arch) if latest_build else DLL_BUILD)
     install_dir = install_dir or get_install_dir()
 
     url = get_download_url(version, arch, build)
     dll_name = get_dll_filename(arch)
-    dist_dir = get_dist_dir_name(arch)
+    dist_dir = get_dist_dir_name(arch, version, build)
 
-    print("📦 JadeUI DLL 下载器")
+    print("[JadeUI] DLL 下载器")
     print(f"   版本: v{version}.{build}")
     print(f"   架构: {arch}")
     print(f"   下载地址: {url}")
@@ -212,7 +317,7 @@ def download_dll(
 
     # Download to temp file
     try:
-        print("\n⬇️  正在下载...")
+        print("\n正在下载...")
 
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
             tmp_path = tmp_file.name
@@ -237,12 +342,12 @@ def download_dll(
                         progress_callback(downloaded, total_size)
                     elif total_size > 0:
                         percent = (downloaded / total_size) * 100
-                        bar = "█" * int(percent // 5) + "░" * (20 - int(percent // 5))
+                        bar = "#" * int(percent // 5) + "." * (20 - int(percent // 5))
                         print(f"\r   [{bar}] {percent:.1f}%", end="", flush=True)
 
                 print()  # New line after progress
 
-        print(f"✅ 下载完成 ({downloaded / 1024 / 1024:.1f} MB)")
+        print(f"下载完成 ({downloaded / 1024 / 1024:.1f} MB)")
 
     except urllib.error.HTTPError as e:
         os.unlink(tmp_path) if os.path.exists(tmp_path) else None
@@ -256,7 +361,7 @@ def download_dll(
 
     # Extract ZIP (JadeView 2.x: 包内文件位于根目录，仅需 DLL，跳过 .lib/.h 等)
     try:
-        print("📂 正在解压...")
+        print("正在解压...")
 
         with zipfile.ZipFile(tmp_path, "r") as zip_ref:
             namelist = zip_ref.namelist()
@@ -277,7 +382,7 @@ def download_dll(
                 # 回退：找不到精确文件名时整包解压
                 zip_ref.extractall(target_dir)
 
-        print("✅ 解压完成")
+        print("解压完成")
 
     except zipfile.BadZipFile:
         raise RuntimeError("下载的文件不是有效的 ZIP 文件")
@@ -299,7 +404,7 @@ def download_dll(
         else:
             raise RuntimeError(f"解压后未找到 DLL 文件: {dll_path}")
 
-    print("\n🎉 安装成功!")
+    print("\n安装成功!")
     print(f"   DLL 路径: {dll_path}")
 
     return dll_path
@@ -322,7 +427,7 @@ def ensure_dll() -> Path:
 
     # DLL not found, prompt for download
     print("\n" + "=" * 50)
-    print("⚠️  未找到 JadeView DLL")
+    print("[WARN] 未找到 JadeView DLL")
     print("=" * 50)
     print("\n需要下载 JadeView DLL 才能运行应用。")
     print(f"下载地址: https://github.com/{GITHUB_REPO}/releases")
@@ -332,9 +437,10 @@ def ensure_dll() -> Path:
     try:
         return download_dll()
     except Exception as e:
-        print(f"\n❌ 自动下载失败: {e}")
+        print(f"\n自动下载失败: {e}")
         arch = get_architecture()
-        zip_name = f"JadeView_win_{arch}_v{DLL_VERSION}.{DLL_BUILD}.zip"
+        build = get_latest_build(DLL_VERSION, arch)
+        zip_name = f"JadeView_win_{arch}_v{DLL_VERSION}.{build}.zip"
         print("\n请手动下载:")
         print(f"  1. 访问 https://github.com/{GITHUB_REPO}/releases")
         print(f"  2. 下载 {zip_name}")
@@ -366,8 +472,13 @@ def cli():
     parser.add_argument(
         "-b",
         "--build",
-        default=DLL_BUILD,
-        help=f"构建号 (默认: {DLL_BUILD})",
+        default=None,
+        help=f"构建号 (默认: 同版本最新构建号，离线回退 {DLL_BUILD})",
+    )
+    parser.add_argument(
+        "--no-latest-build",
+        action="store_true",
+        help="不查询同版本最新构建号，使用内置默认构建号",
     )
     parser.add_argument(
         "-d",
@@ -386,10 +497,10 @@ def cli():
     if args.check:
         dll_path = find_dll()
         if dll_path:
-            print(f"✅ 找到 DLL: {dll_path}")
+            print(f"找到 DLL: {dll_path}")
             return 0
         else:
-            print("❌ 未找到 DLL")
+            print("未找到 DLL")
             return 1
 
     try:
@@ -398,10 +509,11 @@ def cli():
             arch=args.arch,
             build=args.build,
             install_dir=args.dir,
+            latest_build=not args.no_latest_build,
         )
         return 0
     except Exception as e:
-        print(f"❌ 错误: {e}")
+        print(f"错误: {e}")
         return 1
 
 

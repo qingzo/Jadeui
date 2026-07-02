@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JadeUI v2.3 Demo</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f7f4;
+      --panel: #ffffff;
+      --text: #1d2423;
+      --muted: #64706d;
+      --line: #dfe4df;
+      --accent: #0f766e;
+      --accent-2: #334155;
+      --danger: #b42318;
+      --button: #eef2ef;
+      --shadow: 0 10px 24px rgba(20, 33, 31, .08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #181c1b;
+        --panel: #222827;
+        --text: #eef4f2;
+        --muted: #9ba8a5;
+        --line: #35403e;
+        --button: #2f3836;
+        --shadow: 0 10px 24px rgba(0, 0, 0, .22);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, sans-serif;
+      font-size: 14px;
+    }
+    .titlebar {
+      height: 46px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--panel) 86%, transparent);
+    }
+    .drag {
+      height: 100%;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 18px;
+      -webkit-app-region: drag;
+    }
+    .mark {
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      background: var(--accent);
+      box-shadow: inset -5px -5px 0 rgba(255,255,255,.22);
+      flex: 0 0 auto;
+    }
+    .title {
+      font-weight: 650;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .controls {
+      display: flex;
+      height: 100%;
+      -webkit-app-region: no-drag;
+    }
+    .control {
+      width: 46px;
+      height: 46px;
+      border: 0;
+      border-radius: 0;
+      margin: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 16px;
+      cursor: pointer;
+    }
+    .control:hover { background: var(--button); }
+    .control.close:hover { background: var(--danger); color: white; }
+    main {
+      width: min(1120px, calc(100vw - 36px));
+      margin: 0 auto;
+      padding: 24px 0 28px;
+    }
+    .top {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    h1 { margin: 0; font-size: 24px; font-weight: 720; }
+    .badge {
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .card {
+      min-height: 150px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+    .wide { grid-column: span 2; }
+    h2 {
+      margin: 0 0 11px;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .buttons {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    button {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 8px 10px;
+      background: var(--button);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .levels {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .levels button.active {
+      background: var(--accent-2);
+      color: #fff;
+      border-color: var(--accent-2);
+    }
+    .result {
+      min-height: 214px;
+      max-height: 260px;
+      margin: 0;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: color-mix(in srgb, var(--button) 72%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      font: 12px/1.55 Consolas, "Cascadia Mono", monospace;
+    }
+    .icon-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 10px;
+    }
+    .icon-box {
+      width: 64px;
+      height: 64px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--button);
+      flex: 0 0 auto;
+    }
+    .icon-box img {
+      max-width: 44px;
+      max-height: 44px;
+      display: none;
+    }
+    .drop-zone {
+      min-height: 116px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--line));
+      border-radius: 8px;
+      color: var(--muted);
+      padding: 12px;
+    }
+    @media (max-width: 860px) {
+      main { width: min(100vw - 24px, 720px); padding-top: 18px; }
+      .top { align-items: start; flex-direction: column; }
+      .grid { grid-template-columns: 1fr; }
+      .wide { grid-column: span 1; }
+      .levels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <header class="titlebar">
+    <div class="drag" jade-region-drag>
+      <span class="mark"></span>
+      <span class="title">JadeUI v2.3.0-beta.9 Demo</span>
+    </div>
+    <div class="controls">
+      <button class="control" onclick="windowAction('minimize')" aria-label="最小化">-</button>
+      <button class="control" onclick="windowAction('maximize')" aria-label="最大化">□</button>
+      <button class="control close" onclick="windowAction('close')" aria-label="关闭">x</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="top">
+      <div>
+        <h1>v2.3 Native Capabilities</h1>
+      </div>
+      <div class="badge" id="status">ready</div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Version</h2>
+        <div class="buttons">
+          <button class="primary" onclick="call('versionInfo')">读取版本</button>
+          <button onclick="call('hwndInfo')">HWND</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>YAML Storage</h2>
+        <div class="buttons">
+          <button class="primary" onclick="call('storageWrite')">写入</button>
+          <button onclick="call('storageRead')">读取</button>
+          <button onclick="call('storageClear')">清空</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>System</h2>
+        <div class="buttons">
+          <button class="primary" onclick="loadIcon()">文件图标</button>
+          <button onclick="call('autostartStatus')">自启状态</button>
+          <button onclick="call('ntpNow')">网络时间</button>
+        </div>
+        <div class="icon-row">
+          <div class="icon-box"><img id="fileIcon" alt="file icon" /></div>
+          <span id="iconText" class="badge">icon url</span>
+        </div>
+      </article>
+
+      <article class="card wide">
+        <h2>Window</h2>
+        <div class="buttons">
+          <button onclick="toggleState('toggleSkipTaskbar')">隐藏任务栏</button>
+          <button onclick="toggleState('toggleNoActivate')">不抢焦点</button>
+        </div>
+        <h2 style="margin-top:14px">Level</h2>
+        <div class="levels" id="levels">
+          <button data-level="topmost" onclick="setLevel('topmost')">置顶</button>
+          <button data-level="normal" class="active" onclick="setLevel('normal')">普通</button>
+          <button data-level="bottom" onclick="setLevel('bottom')">置底</button>
+          <button data-level="desktop" onclick="setLevel('desktop')">桌面层</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Drag Drop</h2>
+        <div class="drop-zone" id="dropZone">Drop files on this window</div>
+        <div class="buttons" style="margin-top:10px">
+          <button onclick="call('dropEvents')">读取事件</button>
+        </div>
+      </article>
+
+      <article class="card wide">
+        <h2>Output</h2>
+        <pre class="result" id="out">{}</pre>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const out = document.getElementById('out');
+    const statusEl = document.getElementById('status');
+    const dropZone = document.getElementById('dropZone');
+    const fileIcon = document.getElementById('fileIcon');
+    const iconText = document.getElementById('iconText');
+
+    function parseResult(result) {
+      if (typeof result === 'string') {
+        try { return JSON.parse(result); } catch (e) { return result; }
+      }
+      return result;
+    }
+
+    function show(data) {
+      out.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    async function call(channel, payload = '') {
+      setStatus(channel);
+      try {
+        const result = parseResult(await jade.invoke(channel, payload));
+        show({ channel, result });
+        setStatus('ok');
+        return result;
+      } catch (error) {
+        show(String(error));
+        setStatus('error');
+        return null;
+      }
+    }
+
+    async function windowAction(action) {
+      await jade.invoke('windowAction', action);
+    }
+
+    async function loadIcon() {
+      const result = await call('fileIcon');
+      if (result && result.icon) {
+        fileIcon.src = result.icon;
+        fileIcon.style.display = 'block';
+        iconText.textContent = 'loaded';
+      }
+    }
+
+    async function toggleState(channel) {
+      await call(channel);
+    }
+
+    async function setLevel(level) {
+      const result = await call('setWindowLevel', level);
+      if (result && result.level) {
+        document.querySelectorAll('#levels button').forEach((button) => {
+          button.classList.toggle('active', button.dataset.level === result.level);
+        });
+      }
+    }
+
+    if (window.jade && jade.on) {
+      jade.on('dragDropEvent', (payload) => {
+        const data = parseResult(payload);
+        dropZone.textContent = `${data.type}: ${(data.paths || []).join(', ') || 'window event'}`;
+        show({ channel: 'dragDropEvent', result: data });
+      });
+    }
+
+    call('versionInfo');
+  </script>
+</body>
+</html>

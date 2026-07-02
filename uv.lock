@@ -231,7 +231,7 @@ wheels = [
 
 [[package]]
 name = "jadeui"
-version = "2.2.4"
+version = "2.3.0b9"
 source = { editable = "." }
 
 [package.optional-dependencies]

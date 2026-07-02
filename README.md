@@ -29,15 +29,28 @@ JadeUI 是 [JadeView](https://jade.run) 的 Python SDK，让你可以使用 Pyth
 - **全局热键** - 应用在后台也能响应的快捷键 (v2.2.4+)
 - **剪贴板 / 系统信息** - 剪贴板读写、显示器/语言/系统路径 (v2.2.4+)
 - **窗口增强** - 缩放、任务栏进度/闪烁、DevTools、内容保护等 (v2.2.4+)
+- **YAML 存储 / 系统集成** - 持久化存储、开机自启、文件图标、NTP 网络时间 (v2.3.0-beta.9+)
+- **窗口集成增强** - 不进任务栏、不抢焦点、窗口层级、HWND 反查窗口 ID (v2.3.0-beta.9+)
 - **打包体积** - 极小的依赖，打包后体积仅有8MB左右
 
-> 本版本对应 JadeView 原生 **v2.2.4**。从 1.x 升级的破坏性变更详见 [docs/UPGRADE_v2.2.4.md](docs/UPGRADE_v2.2.4.md)。
+> 本版本对应 JadeView 原生 **v2.3.0-beta.9 (Build 26G01)**。从 2.2.4 升级的变更详见 [docs/UPGRADE_v2.3.0-beta.9.md](docs/UPGRADE_v2.3.0-beta.9.md)。
 
 ## 安装
 
 ```bash
 pip install jadeui
 ```
+
+## JadeView DLL 更新规则
+
+JadeUI SDK 只会在已适配的 JadeView API 版本内自动选择最新构建号。例如 `2.3.0-beta.9.26G01` 可以自动更新到同一 tag 下的后续 build，但不会自动跨到 `2.4` 或其它 release tag。
+
+```bash
+jadeui-download              # 下载当前 SDK 适配版本的最新 build
+jadeui-download --build 26G01 # 固定下载指定 build
+```
+
+跨 minor/major 的原生版本升级（如 `2.2` -> `2.3`）可能包含 ABI/API 变化，必须由 SDK 显式适配后再升级。
 
 ## 快速开始
 
@@ -86,6 +99,7 @@ app.run()
 | [vue_app](./examples/vue_app) | Vue.js + JadeUI 集成示例 |
 | [dialog_notification_demo](./examples/dialog_notification_demo) | 对话框与桌面通知 (v1.3.0+) |
 | [p3_demo](./examples/p3_demo) | **系统托盘 / 全局热键 / 剪贴板 / 系统信息 / 窗口增强** (v2.2.4+) |
+| [v23_demo](./examples/v23_demo) | **YAML 存储 / 窗口层级 / 文件图标 / NTP / 拖拽事件** (v2.3.0-beta.9+) |
 
 ### 效果预览
 
@@ -117,6 +131,7 @@ python scripts/build.py your_app.py -o your_app
 
 - **操作系统**: Windows 10/11
 - **Python**: 3.7+
+- **Python 架构**: 支持 x64 / x86 / arm64；JadeUI 会按 Python 解释器架构下载匹配的 JadeView DLL。
 
 ## 许可证
 
